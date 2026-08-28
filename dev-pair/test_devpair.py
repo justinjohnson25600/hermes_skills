@@ -1,0 +1,366 @@
+#!/usr/bin/env python3.11
+"""Regression tests for devpair. Pins the defects the pair found.
+
+Run: python3.11 test_devpair.py   (or: python3.11 -m pytest test_devpair.py)
+No network: every test targets selection, side-effect, and error-propagation
+logic. The one reviewer-invocation test uses a deliberately invalid provider.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import devpair  # noqa: E402
+
+PASS, FAIL = [], []
+
+
+def check(name, cond, detail=""):
+    (PASS if cond else FAIL).append(name)
+    print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  — {detail}" if detail and not cond else ""))
+
+
+def isolated(fn):
+    """Run fn with devpair's state redirected into a temp dir."""
+    def wrapper():
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            orig = (devpair.BASE, devpair.SESSIONS, devpair.CONFIG, devpair.CURRENT)
+            devpair.BASE = base
+            devpair.SESSIONS = base / "sessions"
+            devpair.CONFIG = base / "config.json"
+            devpair.CURRENT = base / "current_session"
+            try:
+                fn(base)
+            finally:
+                devpair.BASE, devpair.SESSIONS, devpair.CONFIG, devpair.CURRENT = orig
+    return wrapper
+
+
+def set_driver(model, provider="zai"):
+    os.environ["DEVPAIR_DRIVER_MODEL"] = model
+    os.environ["DEVPAIR_DRIVER_PROVIDER"] = provider
+
+
+# --- selection -------------------------------------------------------------
+@isolated
+def test_never_self_reviews(base):
+    print("\n[selection] never lets a model peer-review itself")
+    devpair.CONFIG.write_text(json.dumps({"order": ["claude"]}))
+    set_driver("claude-sonnet-4.6", "anthropic")
+    r = devpair.pick_reviewer(None)
+    check("claude driver + order=[claude] -> non-claude reviewer",
+          r["family"] != "claude", f"got {r['family']}")
+
+    set_driver("glm-5.3", "zai")
+    devpair.CONFIG.write_text(json.dumps({"order": ["glm"]}))
+    r = devpair.pick_reviewer(None)
+    check("glm driver + order=[glm] -> non-glm reviewer",
+          r["family"] != "glm", f"got {r['family']}")
+
+
+@isolated
+def test_refuses_when_no_independent(base):
+    print("\n[selection] refuses rather than silently self-reviewing")
+    saved = dict(devpair.REVIEWERS)
+    devpair.REVIEWERS.clear()
+    devpair.REVIEWERS["claude"] = dict(saved["claude"])
+    set_driver("claude-sonnet-4.6", "anthropic")
+    try:
+        devpair.pick_reviewer(None)
+        check("all-same-family -> SystemExit", False, "returned a self-reviewer")
+    except SystemExit as e:
+        check("all-same-family -> SystemExit", "no independent reviewer" in str(e))
+        check("refusal names why each was skipped", "same family as driver" in str(e))
+    finally:
+        devpair.REVIEWERS.clear()
+        devpair.REVIEWERS.update(saved)
+
+
+@isolated
+def test_explicit_override_allowed(base):
+    print("\n[selection] --reviewer is a deliberate override, still flagged")
+    set_driver("claude-sonnet-4.6", "anthropic")
+    r = devpair.pick_reviewer("claude")
+    check("forced same-family returns", r["key"] == "claude")
+    check("forced same-family sets warning flag", r["same_family_as_driver"] is True)
+    try:
+        devpair.pick_reviewer("nonexistent")
+        check("unknown reviewer -> SystemExit", False)
+    except SystemExit:
+        check("unknown reviewer -> SystemExit", True)
+
+
+@isolated
+def test_empty_order_falls_back(base):
+    print("\n[selection] empty config order is safe (no IndexError)")
+    devpair.CONFIG.write_text(json.dumps({"order": []}))
+    set_driver("glm-5.3", "zai")
+    try:
+        r = devpair.pick_reviewer(None)
+        check("order=[] falls back to DEFAULT_ORDER", r["family"] != "glm")
+    except IndexError as e:
+        check("order=[] falls back to DEFAULT_ORDER", False, f"IndexError: {e}")
+
+
+@isolated
+def test_candidates_shared_between_pick_and_retry(base):
+    print("\n[selection] retry list covers ALL independent reviewers")
+    devpair.CONFIG.write_text(json.dumps({"order": ["kimi"]}))
+    set_driver("glm-5.3", "zai")
+    cands = devpair.reviewer_candidates(None)
+    fams = [c["family"] for c in cands]
+    check("narrow order still yields >1 candidate", len(cands) > 1, f"got {fams}")
+    check("first honours config order", cands[0]["key"] == "kimi", f"got {cands[0]['key']}")
+    check("no driver-family candidate in retry list", "glm" not in fams, f"got {fams}")
+
+
+# --- side effects ----------------------------------------------------------
+@isolated
+def test_session_path_no_side_effect(base):
+    print("\n[side effects] resolving a session never invents one")
+    p = devpair.session_path(None, create=False)
+    check("create=False leaves CURRENT absent", not devpair.CURRENT.is_file())
+    check("still returns a usable path", p.suffix == ".json")
+    devpair.session_path(None, create=True)
+    check("create=True writes CURRENT", devpair.CURRENT.is_file())
+
+
+@isolated
+def test_dry_run_creates_nothing(base):
+    print("\n[side effects] --dry-run leaves no state behind")
+    set_driver("glm-5.3", "zai")
+    args = argparse.Namespace(
+        mode="review", session=None, ask="", focus=None, diff=False, diff_ref=None,
+        files=None, plan=None, error=None, cmd=None, reviewer=None, driver=None,
+        timeout=10, json=False, dry_run=True, verbose=False,
+    )
+    rc = devpair.cmd_pair(args)
+    check("dry-run exits 0", rc == 0)
+    check("no CURRENT pointer created", not devpair.CURRENT.is_file())
+    sessions = list(devpair.SESSIONS.glob("*.json")) if devpair.SESSIONS.exists() else []
+    check("no session file created", not sessions, f"got {sessions}")
+
+
+# --- error propagation -----------------------------------------------------
+@isolated
+def test_sh_surfaces_failure(base):
+    print("\n[errors] context commands never fail silently")
+    out, note = devpair.sh(["bash", "-lc", "printf out; printf BOOM >&2; exit 7"], want_status=True)
+    check("stdout still captured", out == "out", f"got {out!r}")
+    check("non-zero exit reported", "exit 7" in note, f"got {note!r}")
+    check("stderr included in note", "BOOM" in note, f"got {note!r}")
+    out2, note2 = devpair.sh(["bash", "-lc", "echo fine"], want_status=True)
+    check("success -> empty note", note2 == "" and out2 == "fine")
+    check("legacy single-return form still works",
+          devpair.sh(["bash", "-lc", "echo x"]) == "x")
+
+
+@isolated
+def test_bad_diff_ref_not_reported_as_no_diff(base):
+    print("\n[errors] a bad --diff-ref is not disguised as 'no diff'")
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            args = argparse.Namespace(
+                diff=False, diff_ref="no-such-ref-xyz", files=None, plan=None,
+                error=None, cmd=None,
+            )
+            _, notes = devpair.gather(args)
+            joined = " ".join(notes)
+            check("failure surfaced to user", "failed" in joined, f"notes={notes}")
+            check("not mislabelled 'no diff found'", "no diff found" not in joined, f"notes={notes}")
+        finally:
+            os.chdir(cwd)
+
+
+@isolated
+def test_run_reviewer_reports_exit_code(base):
+    print("\n[errors] reviewer subprocess failure surfaces the real error")
+    ok, msg = devpair.run_reviewer(
+        {"model": "no-such-model", "provider": "definitely-not-a-provider", "label": "x"},
+        "hi", 60, False,
+    )
+    check("failure reported as not-ok", ok is False)
+    check("message carries exit code", "exit" in msg.lower(), f"got {msg[:80]}")
+    check("message is non-empty", len(msg.strip()) > 10, f"got {msg!r}")
+
+
+# --- context handling ------------------------------------------------------
+@isolated
+def test_clip_omitted_count_accurate(base):
+    print("\n[context] truncation reports the true omitted count")
+    text = "x" * 1000
+    out = devpair.clip(text, 100, "t")
+    head_n, tail_n = int(100 * 0.7), int(100 * 0.25)
+    true_omitted = 1000 - head_n - tail_n
+    check(f"reports {true_omitted}, not 900", f"{true_omitted} chars omitted" in out, out[70:130])
+    body = out.replace("x", "")
+    check("marker present", "truncated" in body)
+    check("short text untouched", devpair.clip("abc", 100) == "abc")
+
+
+@isolated
+def test_reviewer_gets_no_tools(base):
+    print("\n[safety] reviewer is launched read-only (no toolset)")
+    import inspect
+    src = inspect.getsource(devpair.run_reviewer)
+    check("passes -t '' to disable all tools", '"-t", ""' in src)
+    check("no shell=True in reviewer invocation", "shell=True" not in src)
+
+
+# --- driver identity (fix: same-family guard must use the LIVE model) -------
+@isolated
+def test_driver_flag_overrides_config_and_env(base):
+    print("\n[driver] explicit --driver beats env vars and config default")
+    set_driver("glm-5.3", "zai")  # env says glm
+    d = devpair.driver_identity("kimi-coding/kimi-k3")
+    check("provider/model parsed from PROVIDER/MODEL",
+          d["provider"] == "kimi-coding" and d["model"] == "kimi-k3", f"got {d}")
+    check("family derived from explicit model", d["family"] == "kimi", f"got {d['family']}")
+    d2 = devpair.driver_identity("claude-opus-5")
+    check("bare MODEL keeps env provider", d2["provider"] == "zai", f"got {d2}")
+    check("bare MODEL sets family", d2["family"] == "claude", f"got {d2['family']}")
+
+
+@isolated
+def test_same_family_guard_uses_explicit_driver(base):
+    print("\n[driver] the live hole: config says glm, session runs kimi -> kimi excluded")
+    set_driver("glm-5.3", "zai")  # config/env default driver is glm
+    cands = devpair.reviewer_candidates(None, "kimi-coding/kimi-k3")
+    fams = [c["family"] for c in cands]
+    check("kimi NOT offered when the real driver is kimi", "kimi" not in fams, f"got {fams}")
+    check("other independents still offered", "claude" in fams, f"got {fams}")
+    cands2 = devpair.reviewer_candidates(None)  # no explicit -> env driver (glm)
+    check("without --driver, kimi IS allowed (driver is glm)",
+          "kimi" in [c["family"] for c in cands2])
+
+
+# --- followup against an empty session --------------------------------------
+@isolated
+def test_followup_empty_session_warns(base):
+    print("\n[followup] warns instead of silently behaving like critique")
+    import contextlib, io
+    set_driver("glm-5.3", "zai")
+    args = argparse.Namespace(
+        mode="followup", session=None, ask="I fixed it", focus=None, diff=False,
+        diff_ref=None, files=None, plan=None, error=None, cmd=None, reviewer=None,
+        driver=None, timeout=10, json=False, dry_run=True, verbose=False,
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = devpair.cmd_pair(args)
+    check("dry-run followup still exits 0", rc == 0)
+    check("warns about missing prior turns", "no earlier turns" in buf.getvalue(),
+          f"stderr={buf.getvalue()[:120]}")
+
+
+# --- atomic session writes ---------------------------------------------------
+@isolated
+def test_save_session_atomic_no_litter(base):
+    print("\n[sessions] save is atomic and leaves no tmp files")
+    p = base / "sessions" / "s1.json"
+    devpair.save_session(p, {"turns": [{"mode": "review"}]})
+    devpair.save_session(p, {"turns": [{"mode": "review"}, {"mode": "followup"}]})
+    data = json.loads(p.read_text())
+    check("second save intact", len(data["turns"]) == 2)
+    litter = list((base / "sessions").glob("*.tmp-*"))
+    check("no tmp files left behind", not litter, f"got {litter}")
+
+
+# --- merge-base diff semantics ------------------------------------------------
+@isolated
+def test_diff_ref_uses_merge_base(base):
+    print("\n[diff] --diff-ref shows THIS branch's changes, not the ref's")
+    with tempfile.TemporaryDirectory() as repo:
+        def git(*a, **kw):
+            subprocess.run(["git", *a], cwd=repo, check=True,
+                           capture_output=True, **kw)
+        git("init", "-q", "-b", "main")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
+        (Path(repo) / "feature.py").write_text("FEATURE = 1\n")
+        git("add", ".")
+        git("checkout", "-q", "-b", "feature")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feature work")
+        git("checkout", "-q", "main")
+        (Path(repo) / "unrelated.py").write_text("UNRELATED = 1\n")
+        git("add", ".")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "main moved on")
+        git("checkout", "-q", "feature")
+        (Path(repo) / "wip.py").write_text("WIP = 1\n")  # uncommitted, untracked
+        (Path(repo) / "feature.py").write_text("FEATURE = 2\n")  # uncommitted, tracked
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            args = argparse.Namespace(diff=False, diff_ref="main", files=None,
+                                      plan=None, error=None, cmd=None)
+            ctx, notes = devpair.gather(args)
+            check("feature change IS in the diff", "FEATURE = 1" in ctx, ctx[:200])
+            check("main's unrelated move is NOT", "UNRELATED" not in ctx)
+            check("uncommitted tracked change captured", "FEATURE = 2" in ctx)
+            check("uncommitted section labelled", "UNCOMMITTED CHANGES" in ctx)
+            check("untracked file still listed", "wip.py" in ctx)
+            check("no false failure notes", not notes, f"notes={notes}")
+        finally:
+            os.chdir(cwd)
+
+
+# --- argparse collision (subcommand dest vs --cmd) ----------------------------
+def test_no_phantom_cmd_from_subcommand():
+    print("\n[argparse] subcommand selection never leaks into --cmd")
+    # The subparser dest used to be 'cmd' with set_defaults(cmd="pair"), so
+    # every run without -c executed a phantom `bash -lc pair`. Pin it via the
+    # real CLI: a dry-run must not produce a 'pair failed' note.
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run(
+            [sys.executable, str(Path(devpair.__file__)), "review",
+             "--driver", "kimi-coding/kimi-k3", "--dry-run"],
+            capture_output=True, text=True, cwd=td, timeout=60,
+        )
+    check("dry-run exits 0", r.returncode == 0, r.stderr[:200])
+    check("no phantom `pair` context command", "`pair` failed" not in r.stderr,
+          r.stderr[:200])
+    check("dry-run prints reviewer choice", "reviewer :" in r.stdout, r.stdout[:200])
+
+
+def main():
+    print("devpair regression tests")
+    print("=" * 60)
+    for t in (
+        test_never_self_reviews,
+        test_refuses_when_no_independent,
+        test_explicit_override_allowed,
+        test_empty_order_falls_back,
+        test_candidates_shared_between_pick_and_retry,
+        test_session_path_no_side_effect,
+        test_dry_run_creates_nothing,
+        test_sh_surfaces_failure,
+        test_bad_diff_ref_not_reported_as_no_diff,
+        test_run_reviewer_reports_exit_code,
+        test_clip_omitted_count_accurate,
+        test_reviewer_gets_no_tools,
+        test_driver_flag_overrides_config_and_env,
+        test_same_family_guard_uses_explicit_driver,
+        test_followup_empty_session_warns,
+        test_save_session_atomic_no_litter,
+        test_diff_ref_uses_merge_base,
+        test_no_phantom_cmd_from_subcommand,
+    ):
+        t()
+    print("\n" + "=" * 60)
+    print(f"{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        for f in FAIL:
+            print(f"  FAILED: {f}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

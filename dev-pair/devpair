@@ -1,0 +1,31 @@
+#!/bin/bash
+# devpair — the second pair of eyes. Supervisory review on a different LLM.
+#
+# Install: copy to ~/.local/bin/devpair, chmod +x, and point DEVPAIR_PY at
+# wherever you installed devpair.py.
+#
+# The interpreter chain smoke-tests each candidate (venvs break in ways that
+# only show up at import time — getpath/init_fs_encoding failures). First
+# candidate that can actually import encodings wins. Edit the list for your
+# machine; python3.11 from PATH is usually enough.
+set -u
+
+DEVPAIR_PY="${DEVPAIR_PY:-$HOME/.hermes/devpair/devpair.py}"
+
+candidates=(
+  "python3.11"
+  "/opt/homebrew/bin/python3.11"
+  "/usr/local/bin/python3.11"
+  "python3"
+)
+
+for py in "${candidates[@]}"; do
+  # bare names resolve via PATH; paths must exist
+  if [[ "$py" == */* && ! -x "$py" ]]; then continue; fi
+  if "$py" -c "import encodings" 2>/dev/null; then
+    exec "$py" "$DEVPAIR_PY" "$@"
+  fi
+done
+
+echo "devpair: no working python3.11 found (tried: ${candidates[*]})" >&2
+exit 127
