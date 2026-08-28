@@ -2,6 +2,17 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.2 — 2026-08-28
+
+Documentation release.
+
+- Added `README.md`: human-facing documentation covering what the tool is and
+  why it exists (cross-model supervision), the architecture, installation and
+  configuration, per-mode usage with examples, the output contract, the safety
+  model, and a troubleshooting table. SKILL.md remains the agent-facing
+  contract; README.md is the operator-facing guide.
+- No functional change.
+
 ## 1.1.1 — 2026-08-28
 
 Initial public release (first publication to the hermes_skills repo).
