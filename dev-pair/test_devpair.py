@@ -329,6 +329,158 @@ def test_no_phantom_cmd_from_subcommand():
     check("dry-run prints reviewer choice", "reviewer :" in r.stdout, r.stdout[:200])
 
 
+# --- SECRETS: nothing credential-shaped may reach a third-party API ----------
+@isolated
+def test_secrets_never_reach_the_prompt(base):
+    print("\n[secrets] credentials are redacted before leaving the machine")
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-q", "--allow-empty", "-m", "base"],
+                       cwd=repo, check=True, capture_output=True)
+        (Path(repo) / ".env").write_text(
+            "OPENAI_API_KEY=sk-proj-REALSECRETVALUE123456789\n"
+            "DATABASE_URL=postgres://admin:hunter2@prod.db/main\n"
+            "GITHUB_TOKEN=ghp_LIVETOKEN9999999999999999\n"
+            "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n"
+            "DEBUG=true\n"
+        )
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            args = argparse.Namespace(diff=True, diff_ref=None, files=None,
+                                      plan=None, error=None, cmd=None)
+            ctx, notes = devpair.gather(args)
+        finally:
+            os.chdir(cwd)
+    for probe, label in (
+        ("sk-proj-REALSECRETVALUE", "openai key"),
+        ("hunter2", "db password"),
+        ("ghp_LIVETOKEN", "github token"),
+        ("AKIAIOSFODNN7EXAMPLE", "aws key id"),
+    ):
+        check(f"{label} NOT in outbound context", probe not in ctx,
+              "LEAKED — this goes to a third-party API")
+    check("redaction is reported to the user",
+          any("redacted" in n for n in notes), f"notes={notes}")
+    check("non-secret values survive", "DEBUG" in ctx)
+    check("key NAMES survive so the reviewer can still reason",
+          "OPENAI_API_KEY" in ctx)
+
+
+def test_redact_secrets_unit():
+    print("\n[secrets] redactor: shapes, placeholders, and value-only replacement")
+    cases = [
+        ("token = sk-abcdefghij1234567890", "sk-abcdefghij"),
+        ("Authorization: Bearer abcdef1234567890", "abcdef1234567890"),
+        ("url = mysql://root:s3cr3tpw@db:3306/x", "s3cr3tpw"),
+        ('{"client_secret": "GOCSPX-abcdefghijklmnop"}', "GOCSPX-abcdefghijklmnop"),
+        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n-----END RSA PRIVATE KEY-----",
+         "MIIEow=="),
+    ]
+    for text, secret in cases:
+        out, n = devpair.redact_secrets(text)
+        check(f"redacts {secret[:18]!r}", secret not in out and n > 0, f"got {out!r}")
+    # Must NOT destroy placeholders — that would make reviews of config
+    # templates useless and train users to distrust the redactor.
+    keep, n = devpair.redact_secrets("API_KEY=<your-key-here>\nPASSWORD=changeme")
+    check("leaves obvious placeholders alone", "<your-key-here>" in keep, f"got {keep!r}")
+    clean, n2 = devpair.redact_secrets("def add(a, b):\n    return a + b\n")
+    check("ordinary code is untouched", n2 == 0 and "return a + b" in clean)
+
+
+# --- same-family guard must FAIL CLOSED --------------------------------------
+@isolated
+def test_unknown_family_fails_closed(base):
+    print("\n[selection] an unidentifiable driver refuses instead of faking independence")
+    set_driver("my-custom-alias", "some-unknown-gateway")
+    try:
+        devpair.reviewer_candidates(None)
+        check("unknown driver family -> SystemExit", False,
+              "offered reviewers as 'independent' without proof")
+    except SystemExit as e:
+        check("unknown driver family -> SystemExit", True)
+        check("refusal explains the fix", "--driver" in str(e), f"got {str(e)[:120]}")
+
+
+@isolated
+def test_family_inferred_from_provider(base):
+    print("\n[selection] an opaque model name still resolves via its provider")
+    set_driver("my-fast-coder", "anthropic")
+    d = devpair.driver_identity()
+    check("anthropic provider -> claude family", d["family"] == "claude", f"got {d}")
+    cands = devpair.reviewer_candidates(None)
+    fams = [c["family"] for c in cands]
+    check("claude NOT offered to review a claude-backed alias", "claude" not in fams,
+          f"got {fams}")
+    check("independent reviewers still offered", len(cands) >= 2, f"got {fams}")
+    for prov, fam in (("kimi-coding", "kimi"), ("zai", "glm"),
+                      ("openai", "gpt"), ("mystery-gw", "unknown")):
+        set_driver("opaque-name", prov)
+        check(f"provider {prov} -> {fam}", devpair.driver_identity()["family"] == fam,
+              f"got {devpair.driver_identity()['family']}")
+
+
+@isolated
+def test_pick_reviewer_honours_driver(base):
+    print("\n[selection] pick_reviewer respects an explicit driver")
+    set_driver("glm-5.3", "zai")
+    r = devpair.pick_reviewer(None, "kimi-coding/kimi-k3")
+    check("kimi driver -> non-kimi reviewer", r["family"] != "kimi", f"got {r['family']}")
+
+
+# --- new code must actually be visible to the reviewer ------------------------
+@isolated
+def test_untracked_files_are_read_not_just_named(base):
+    print("\n[context] brand-new files reach the reviewer as CODE, not just a filename")
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-q", "--allow-empty", "-m", "base"],
+                       cwd=repo, check=True, capture_output=True)
+        (Path(repo) / "brandnew.py").write_text(
+            "def withdraw(acct, amount):\n"
+            "    acct.balance -= amount   # no overdraft check\n"
+            "    return acct.balance\n"
+        )
+        (Path(repo) / "ignored.bin").write_bytes(b"\x00\x01\x02binary")
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            args = argparse.Namespace(diff=True, diff_ref=None, files=None,
+                                      plan=None, error=None, cmd=None)
+            ctx, notes = devpair.gather(args)
+        finally:
+            os.chdir(cwd)
+    check("filename listed", "brandnew.py" in ctx)
+    check("ACTUAL CODE present", "acct.balance -= amount" in ctx,
+          "reviewer would be reviewing a filename only")
+    check("code is line-numbered for file:line citations", "    1| def withdraw" in ctx,
+          ctx[:200])
+    check("binary content not dumped", "\x00" not in ctx)
+    check("no misleading 'no diff found' when new code exists",
+          not any("no diff found" in n for n in notes), f"notes={notes}")
+
+
+# --- a missing hermes binary must degrade, not crash --------------------------
+def test_missing_hermes_binary_is_soft_failure():
+    print("\n[errors] a missing `hermes` CLI falls through instead of crashing")
+    env = dict(os.environ, PATH="/nonexistent")
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r); import devpair; "
+         "print(devpair.run_reviewer({'model':'m','provider':'p','label':'L'},'hi',5,False))"
+         % str(Path(devpair.__file__).parent)],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+    check("no traceback", "Traceback" not in r.stderr, r.stderr[-200:])
+    check("returns a failure tuple", "False" in r.stdout, r.stdout[:120])
+    check("names the real cause", "hermes" in r.stdout.lower() and "path" in r.stdout.lower(),
+          r.stdout[:160])
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -351,6 +503,13 @@ def main():
         test_save_session_atomic_no_litter,
         test_diff_ref_uses_merge_base,
         test_no_phantom_cmd_from_subcommand,
+        test_secrets_never_reach_the_prompt,
+        test_redact_secrets_unit,
+        test_unknown_family_fails_closed,
+        test_family_inferred_from_provider,
+        test_pick_reviewer_honours_driver,
+        test_untracked_files_are_read_not_just_named,
+        test_missing_hermes_binary_is_soft_failure,
     ):
         t()
     print("\n" + "=" * 60)

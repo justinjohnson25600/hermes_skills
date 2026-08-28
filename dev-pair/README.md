@@ -171,6 +171,9 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 ## Safety model
 
 - The **reviewer** is read-only by construction (empty toolset). It cannot touch your machine.
+- **Secrets are redacted before they leave your machine.** Everything the harness gathers passes through `redact_secrets()` at a single chokepoint: vendor token shapes (`sk-`, `ghp_`, `AKIA`, `xox`, `AIza`, `ya29`, JWTs), private-key blocks, passwords embedded in URLs, secret-looking `KEY=value` assignments, and `Authorization:` headers are replaced with `[REDACTED:kind]`, and you're told how many were caught. Key *names* and URL hosts survive so the reviewer can still reason about the code. Obvious placeholders (`<your-key-here>`, `changeme`) are left alone.
+  This is defence in depth, **not a guarantee** — a novel credential format can still slip through. If you work in a repo full of live secrets, look at what you're sending before you send it.
+- **Independence fails closed.** If the driver's model family can't be identified (from the model name, then the provider), the tool refuses rather than offering an unprovable guarantee. Pass `--driver` to resolve it.
 - The **harness** gathers context locally, and **`--cmd` runs whatever shell command you give it with your own privileges** — that flag is for you, and it is not sandboxed. Never pass a command you wouldn't run yourself.
 - A bad `--diff-ref` is reported as a failure, never disguised as "no diff".
 - Session files are written atomically; `--dry-run` and `log` create no state.
@@ -180,6 +183,7 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 | Symptom | Cause | Fix |
 |---|---|---|
 | `no independent reviewer available` | Every configured reviewer shares the driver's family | Configure a second model family, pass correct `--driver`, or force `--reviewer` accepting the weaker review |
+| `cannot identify the driver's model family` | Model name is an alias and the provider is unrecognised | Pass `--driver PROVIDER/MODEL` with the real model; this refusal is deliberate (fail-closed) |
 | doctor FAILs on a backend | Auth or provider config | `hermes -z "hi" -m MODEL --provider P -t ""` directly to see the real error |
 | Local model times out | Small reasoning models think for ~2 min before answering | `--timeout 900`; doctor already allows 300s for local backends |
 | Review reads like generic advice | No evidence was attached | Always pass `--diff`, `--files`, `--plan`, or `--error` |
@@ -190,14 +194,14 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 18 regression tests, no network required
+python3.11 test_devpair.py     # 25 regression tests (84 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.2**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.3**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

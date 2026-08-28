@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.2
+version: 1.1.3
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux]
@@ -157,9 +157,26 @@ a valid answer — the pair is instructed not to manufacture problems to look us
   implemented in a way that reintroduced a side-effect it had itself flagged a
   turn earlier. Run the test suite after taking its advice.
 
+## Safety Behaviours You Should Know
+
+- **Secrets are redacted before send.** Everything gathered passes through
+  `redact_secrets()` at one chokepoint: vendor tokens (`sk-`, `ghp_`, `AKIA`,
+  `xox`, `AIza`, `ya29`), JWTs, private-key blocks, URL passwords, secret-looking
+  `KEY=value` assignments and `Authorization:` headers become `[REDACTED:kind]`.
+  A stderr note reports the count. This is defence in depth, not a guarantee —
+  if the repo is full of live credentials, check the evidence before sending.
+- **Independence fails closed.** If the driver's family can't be identified from
+  the model name, it is inferred from the provider; if it still can't, devpair
+  REFUSES rather than offering an unprovable guarantee. Pass `--driver` to fix.
+- **New/untracked files are included as code**, not just listed — `git diff`
+  can't show them, so new-file-only work would otherwise be reviewed blind
+  (max 5 files, 8k chars each; binaries skipped).
+- **A missing `hermes` binary is a soft failure** — it falls through to the next
+  backend instead of crashing.
+
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 18 regression tests pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 25 regression tests (84 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.

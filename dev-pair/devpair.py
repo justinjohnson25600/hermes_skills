@@ -42,13 +42,13 @@ CURRENT = BASE / "current_session"
 MAX_CONTEXT_CHARS = 90_000
 MAX_FILE_CHARS = 24_000
 MAX_DIFF_CHARS = 60_000
+MAX_UNTRACKED_FILES = 5
+MAX_UNTRACKED_CHARS = 8_000
+MAX_UNTRACKED_BYTES = 256_000
 
 # ---------------------------------------------------------------------------
 # Reviewer roster. Ordered by preference. Each MUST be a different model family
 # from the driver so the critique is genuinely independent.
-#
-# "provider" values are Hermes provider IDs from YOUR config.yaml — edit these
-# (and the models) to match your install, then verify with `devpair doctor`.
 # ---------------------------------------------------------------------------
 REVIEWERS = {
     "kimi": {
@@ -121,7 +121,30 @@ def driver_identity(explicit: str | None = None) -> dict:
             provider, model = explicit.split("/", 1)
         else:
             model = explicit
-    return {"model": model, "provider": provider, "family": _family_of(model)}
+    family = _family_of(model)
+    if family == "unknown":
+        # A model alias we don't recognise (e.g. "my-fast-coder") would make
+        # every reviewer look independent, which is exactly the failure this
+        # tool exists to prevent. Fall back to inferring from the PROVIDER,
+        # which aliases cannot disguise.
+        family = _family_of_provider(provider)
+    return {"model": model, "provider": provider, "family": family}
+
+
+def _family_of_provider(provider: str) -> str:
+    """Infer a model family from the provider ID when the model name is opaque."""
+    p = (provider or "").lower()
+    for key, pat in (
+        ("claude", r"anthropic|claude"),
+        ("kimi", r"kimi|moonshot"),
+        ("glm", r"zai|zhipu|glm"),
+        ("gpt", r"openai|azure"),
+        ("qwen", r"qwen|dashscope"),
+        ("gemini", r"gemini|google|vertex"),
+    ):
+        if re.search(pat, p):
+            return key
+    return "unknown"
 
 
 def _family_of(model: str) -> str:
@@ -156,6 +179,20 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None) ->
 
     out: list[dict] = []
     skipped: list[str] = []
+
+    if driver["family"] == "unknown":
+        # Fail CLOSED. With an unidentifiable driver, every reviewer compares
+        # as "different" and the independence guarantee silently evaporates.
+        sys.exit(
+            "devpair: cannot identify the driver's model family.\n"
+            f"  driver resolved to {driver['provider']}/{driver['model']}\n"
+            "  Neither the model name nor the provider matched a known family, so a\n"
+            "  reviewer cannot be proven independent — and an unprovable guarantee is\n"
+            "  worse than none. Pass --driver PROVIDER/MODEL naming the real model\n"
+            "  (e.g. --driver anthropic/claude-sonnet-4.6), or force a reviewer with\n"
+            "  --reviewer <name> if you accept an unverified review."
+        )
+
     for key in list(order) + [k for k in REVIEWERS if k not in order]:
         r = REVIEWERS.get(key)
         if not r:
@@ -183,9 +220,9 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None) ->
     return out
 
 
-def pick_reviewer(explicit: str | None) -> dict:
+def pick_reviewer(explicit: str | None, driver_spec: str | None = None) -> dict:
     """Choose a reviewer that is NOT the same family as the driver."""
-    return reviewer_candidates(explicit)[0]
+    return reviewer_candidates(explicit, driver_spec)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +322,80 @@ def clip(text: str, limit: int, label: str = "") -> str:
     return f"{head}\n\n[... {label} truncated: {omitted} chars omitted ...]\n\n{tail}"
 
 
+# ---------------------------------------------------------------------------
+# Secret redaction. EVERYTHING gathered here is posted to a third-party model
+# API, so credentials must never survive the trip. This is defence in depth,
+# not a guarantee: it catches the common shapes, and the note tells the user
+# something was caught so they can judge whether to send at all.
+# ---------------------------------------------------------------------------
+# Each entry: (regex, kind, secret_group). secret_group is the capture group
+# holding the SECRET itself — 0 means the whole match. Everything outside that
+# group is preserved, so the reviewer still sees structure (key names, URL
+# hosts, header names) and can reason about the code.
+SECRET_PATTERNS: list[tuple[str, str, int]] = [
+    # --- high-confidence vendor token shapes (prefix + entropy) --------------
+    (r"sk-[A-Za-z0-9_\-]{16,}", "openai-key", 0),
+    (r"gh[pousr]_[A-Za-z0-9]{16,}", "github-token", 0),
+    (r"github_pat_[A-Za-z0-9_]{20,}", "github-pat", 0),
+    (r"xox[abprs]-[A-Za-z0-9\-]{10,}", "slack-token", 0),
+    (r"AKIA[0-9A-Z]{16}", "aws-key-id", 0),
+    (r"ya29\.[A-Za-z0-9_\-]{20,}", "google-oauth", 0),
+    (r"AIza[A-Za-z0-9_\-]{30,}", "google-api-key", 0),
+    (r"GOCSPX-[A-Za-z0-9_\-]{10,}", "google-client-secret", 0),
+    (r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}", "jwt", 0),
+    (r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----",
+     "private-key", 0),
+    # --- structural: the secret is a middle/last group ----------------------
+    # Authorization: Bearer <token>   (must precede the generic assignment rule,
+    # or "AUTH...:" would match and redact the scheme word instead of the token)
+    (r"(?i)(authorization\s*[:=]\s*(?:bearer|basic|token)\s+)"
+     r"((?!\[REDACTED)[A-Za-z0-9._\-+/=]{8,})", "auth-header", 2),
+    # scheme://user:secret@host
+    (r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@]+:)((?!\[REDACTED)[^\s@]{3,})(@)",
+     "url-password", 2),
+    # KEY=value / "key": "value" / key: value  — where the NAME looks secret.
+    (r"(?i)\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY"
+     r"|PRIVATE[_-]?KEY|CLIENT[_-]?SECRET|CREDENTIAL)[A-Z0-9_]*)"
+     r"([\"']?\s*[:=]\s*[\"']?)"
+     r"((?!\[REDACTED)[^\s\"',;]{4,})", "assigned-secret", 3),
+]
+
+_PLACEHOLDERISH = re.compile(
+    r"(?i)^(x{3,}|\*{3,}|\.{3,}|<[^>]*>|\$\{?[a-z_]+\}?|change[_-]?me|your[_-]?[\w\-]+"
+    r"|redacted|placeholder|example|dummy|none|null|true|false|test|localhost)$"
+)
+
+
+def redact_secrets(text: str) -> tuple[str, int]:
+    """Strip credential-shaped strings. Returns (clean_text, count_redacted).
+
+    Only the secret itself is replaced, never the surrounding structure, so a
+    reviewer can still reason about config shape without reading the values.
+    """
+    if not text:
+        return text, 0
+    hits = 0
+
+    def _make_sub(kind: str, group: int):
+        def _sub(m: re.Match) -> str:
+            nonlocal hits
+            secret = m.group(group)
+            if not secret or _PLACEHOLDERISH.match(secret):
+                return m.group(0)
+            hits += 1
+            whole, start = m.group(0), m.start()
+            # Splice the placeholder into the match, preserving everything else.
+            return (whole[: m.start(group) - start]
+                    + f"[REDACTED:{kind}]"
+                    + whole[m.end(group) - start:])
+        return _sub
+
+    out = text
+    for pat, kind, group in SECRET_PATTERNS:
+        out = re.sub(pat, _make_sub(kind, group), out)
+    return out, hits
+
+
 def gather(args) -> tuple[str, list[str]]:
     parts: list[str] = []
     notes: list[str] = []
@@ -314,7 +425,7 @@ def gather(args) -> tuple[str, list[str]]:
         untracked = sh(["git", "ls-files", "--others", "--exclude-standard"], cwd)
         if d.strip():
             parts.append(f"## DIFF UNDER REVIEW — {src}\n```diff\n{clip(d, MAX_DIFF_CHARS, 'diff')}\n```")
-        elif not note:
+        elif not note and not untracked.strip():
             notes.append(f"no diff found for '{src}'")
         if ref:
             u, unote = sh(["git", "diff", "HEAD"], cwd, want_status=True)
@@ -326,10 +437,39 @@ def gather(args) -> tuple[str, list[str]]:
             elif unote:
                 notes.append(f"`git diff HEAD` failed ({unote})")
         if untracked.strip():
+            files = [f for f in untracked.splitlines() if f.strip()]
             parts.append(
                 "## UNTRACKED FILES (git diff does NOT show these — new code hides here)\n"
-                + untracked
+                + "\n".join(files)
             )
+            # Naming them is not enough: brand-new code is invisible to
+            # `git diff`, so a review of a new-file-only change would see
+            # nothing but a filename. Read a bounded number of them.
+            shown = 0
+            for f in files:
+                if shown >= MAX_UNTRACKED_FILES:
+                    parts.append(
+                        f"## NOTE\n{len(files) - shown} further untracked file(s) not shown "
+                        f"(limit {MAX_UNTRACKED_FILES}). Use --files to include specific ones."
+                    )
+                    break
+                p = Path(cwd) / f
+                try:
+                    if not p.is_file() or p.stat().st_size > MAX_UNTRACKED_BYTES:
+                        continue
+                    body = p.read_text(errors="replace")
+                except Exception:
+                    continue
+                if not body.strip() or "\x00" in body[:1024]:
+                    continue
+                numbered = "\n".join(
+                    f"{i:>5}| {ln}" for i, ln in enumerate(body.splitlines(), 1)
+                )
+                parts.append(
+                    f"## NEW FILE (untracked): {f}\n```\n"
+                    f"{clip(numbered, MAX_UNTRACKED_CHARS, f)}\n```"
+                )
+                shown += 1
 
     for f in args.files or []:
         p = Path(f).expanduser()
@@ -381,6 +521,15 @@ def gather(args) -> tuple[str, list[str]]:
                 parts.append(f"## PIPED CONTEXT\n```\n{clip(piped, 30000, 'stdin')}\n```")
 
     blob = "\n\n".join(parts)
+    # Single chokepoint: everything leaving this function is bound for a
+    # third-party API, so redaction happens HERE and cannot be bypassed by a
+    # future context source that forgets to call it.
+    blob, redacted = redact_secrets(blob)
+    if redacted:
+        notes.append(
+            f"redacted {redacted} credential-shaped value(s) before sending — "
+            "review the evidence yourself if the code under review handles secrets"
+        )
     return clip(blob, MAX_CONTEXT_CHARS, "total context"), notes
 
 
@@ -560,6 +709,12 @@ def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tu
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return False, f"reviewer timed out after {timeout}s"
+    except FileNotFoundError:
+        # `hermes` not on PATH. Must be a soft failure: the retry loop should
+        # move on (and doctor should report it) rather than dying on a traceback.
+        return False, "the `hermes` CLI was not found on PATH — is Hermes installed?"
+    except OSError as e:
+        return False, f"could not launch reviewer: {type(e).__name__}: {e}"
     out = (p.stdout or "").strip()
     err = (p.stderr or "").strip()
     if p.returncode != 0:
@@ -708,8 +863,11 @@ def cmd_reset(args) -> int:
 
 
 def cmd_doctor(args) -> int:
-    driver = driver_identity()
+    driver = driver_identity(getattr(args, "driver", None))
     print(f"driver (being supervised): {driver['provider']}/{driver['model']}  family={driver['family']}")
+    if driver["family"] == "unknown":
+        print("  WARNING: driver family unidentified — independence cannot be proven.")
+        print("  Pass --driver PROVIDER/MODEL for an accurate same-family column.")
     print(f"state: {BASE}\n")
     print(f"{'reviewer':<10} {'provider/model':<34} {'family':<8} status")
     print("-" * 78)
@@ -792,6 +950,8 @@ def main() -> int:
 
     pd = sub.add_parser("doctor", help="check reviewer backends")
     pd.set_defaults(func=cmd_doctor)
+    pd.add_argument("--driver", metavar="[PROVIDER/]MODEL",
+                    help="the live session model, for an accurate same-family column")
 
     args = ap.parse_args()
     return args.func(args)

@@ -2,6 +2,48 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.3 — 2026-08-28
+
+Security and correctness pass, from an independent cross-model review
+(Claude reviewing Kimi's implementation — the tool's own premise applied to
+itself). All four findings were reproduced with live tests before fixing.
+
+- **[BLOCKER] Secrets are no longer sent to third-party model APIs.** `gather()`
+  previously posted the working tree verbatim: a repo containing an OpenAI key,
+  a Postgres URL with a password, and a GitHub token leaked all three into the
+  outbound prompt with no warning. Added `redact_secrets()` with 13 credential
+  patterns (vendor token shapes, JWTs, private-key blocks, URL passwords,
+  secret-looking assignments, auth headers), applied at a single chokepoint on
+  `gather()`'s return so no future context source can bypass it. Only the secret
+  itself is replaced — key names, URL hosts and header names survive so the
+  reviewer can still reason about the code. Obvious placeholders
+  (`<your-key-here>`, `changeme`) are deliberately left intact. The user is told
+  how many values were redacted.
+- **[BLOCKER] The same-family guard now fails CLOSED.** `_family_of()` returned
+  `"unknown"` for any model name outside six hardcoded regexes, and `unknown`
+  never equals a reviewer's family — so every reviewer was offered as
+  "independent". A driver aliased as `my-custom-alias` on `anthropic` was
+  offered Claude as an independent reviewer. Now: family is inferred from the
+  **provider** when the model name is opaque, and if it is still unidentifiable
+  the tool refuses with instructions rather than faking the guarantee.
+- **[MAJOR] Untracked files are read, not just named.** `git diff` cannot show
+  new files, so a review of new-file-only work saw a filename and nothing else —
+  and reported a misleading "no diff found". Untracked files are now included as
+  line-numbered code (max 5 files, 8k chars each, 256KB per-file cap, binaries
+  and empties skipped), and the false "no diff" note is suppressed when new
+  code is present.
+- **[MAJOR] A missing `hermes` binary no longer crashes the run.** `run_reviewer`
+  caught only `TimeoutExpired`, so `FileNotFoundError` escaped the retry loop and
+  killed the process with a traceback. Now a soft failure that falls through to
+  the next backend and names the cause.
+- `pick_reviewer()` accepts an explicit driver spec (it previously ignored
+  `--driver` entirely), and `doctor` gained `--driver` so its same-family column
+  reflects the live session rather than the config default.
+- Tests: 18 → 25 (84 individual checks), all passing. New: secret-leak
+  end-to-end, redactor unit cases, fail-closed on unknown family, provider-based
+  family inference, `pick_reviewer` driver honouring, untracked-file visibility,
+  missing-binary soft failure.
+
 ## 1.1.2 — 2026-08-28
 
 Documentation release.
