@@ -73,7 +73,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 158 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 175 checks, no network
 ```
 
 ### Configuration
@@ -334,9 +334,10 @@ The active session is never pruned, regardless of age.
 ## Safety model
 
 - The **reviewer** is read-only by construction (empty toolset). It cannot touch your machine.
-- **Secrets are redacted before they leave your machine.** Everything the harness gathers passes through `redact_secrets()` at a single chokepoint: vendor token shapes (`sk-`, `ghp_`, `AKIA`, `xox`, `AIza`, `ya29`, JWTs), private-key blocks, passwords embedded in URLs, secret-looking `KEY=value` assignments, and `Authorization:*** headers are replaced with `[REDACTED:kind]`, and you're told how many were caught. Key *names* and URL hosts survive so the reviewer can still reason about the code. Obvious placeholders (`<your-key-here>`, `changeme`) are left alone.
+- **Secrets are redacted before they leave your machine.** Everything the harness gathers passes through `redact_secrets()` at a single chokepoint: vendor token shapes (`sk-`, `ghp_`, `AKIA`, `xox`, `AIza`, `ya29`, JWTs), private-key blocks, passwords embedded in URLs, secret-looking `KEY=value` assignments, and bearer tokens in `Authorization` headers are replaced with `[REDACTED:kind]`, and you're told how many were caught. Key *names* and URL hosts survive so the reviewer can still reason about the code. Obvious placeholders (`<your-key-here>`, `changeme`) are left alone.
   This is defence in depth, **not a guarantee** — a novel credential format can still slip through. If you work in a repo full of live secrets, look at what you're sending before you send it.
 - **Independence fails closed.** If the driver's model family can't be identified (from the model name, then the provider), the tool refuses rather than offering an unprovable guarantee. Pass `--driver` to resolve it.
+- **A reviewer whose independence can't be proven says so.** If neither a reviewer's model name nor its provider maps to a known family, it is labelled `INDEPENDENCE UNVERIFIED` — on automatic selection, `--reviewer`, and `--with` alike — and reviewers that *can* be proven independent are tried first. The unprovable one stays available as a fallback; it simply never claims a guarantee it can't back. Scripts can read this as `independence` (`verified` / `unverified` / `same-family`) in `--json`, and it always describes the model that actually answered, not the first one tried.
 - The **harness** gathers context locally, and **`--cmd` runs whatever shell command you give it with your own privileges** — that flag is for you, and it is not sandboxed. Never pass a command you wouldn't run yourself.
 - A bad `--diff-ref` is reported as a failure, never disguised as "no diff".
 - Session files are written atomically; `--dry-run` and `log` create no state.
@@ -357,7 +358,7 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 40 regression tests (158 checks), no network required
+python3.11 test_devpair.py     # 44 regression tests (175 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
@@ -369,6 +370,3 @@ Current: **1.1.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) 
 ## License
 
 MIT — see [../LICENSE](../LICENSE).
-
-
-

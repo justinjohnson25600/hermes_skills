@@ -213,12 +213,19 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 - **Secrets are redacted before send.** Everything gathered passes through
   `redact_secrets()` at one chokepoint: vendor tokens (`sk-`, `ghp_`, `AKIA`,
   `xox`, `AIza`, `ya29`), JWTs, private-key blocks, URL passwords, secret-looking
-  `KEY=value` assignments and `Authorization:` headers become `[REDACTED:kind]`.
+  `KEY=value` assignments and bearer tokens in `Authorization` headers become `[REDACTED:kind]`.
   A stderr note reports the count. This is defence in depth, not a guarantee —
   if the repo is full of live credentials, check the evidence before sending.
 - **Independence fails closed.** If the driver's family can't be identified from
   the model name, it is inferred from the provider; if it still can't, devpair
   REFUSES rather than offering an unprovable guarantee. Pass `--driver` to fix.
+- **An unprovable reviewer is labelled, never assumed safe.** If a reviewer's
+  family can't be resolved from either its model name or its provider, it is
+  marked `INDEPENDENCE UNVERIFIED` on every path — automatic selection,
+  `--reviewer`, and `--with` — and proven-independent reviewers are preferred
+  ahead of it. It is still usable as a fallback; it just never claims a
+  guarantee it cannot support. `--json` reports this as
+  `independence: verified | unverified | same-family`.
 - **New/untracked files are included as code**, not just listed — `git diff`
   can't show them, so new-file-only work would otherwise be reviewed blind
   (max 5 files, 8k chars each; binaries skipped).
@@ -234,7 +241,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 40 regression tests (158 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 44 regression tests (175 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -242,7 +249,7 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 40 regression tests (158 checks)
+- `test_devpair.py` — 44 regression tests (175 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
@@ -250,5 +257,3 @@ maths. No network required. Run after any change.
 State at runtime lives under `<hermes-home>/devpair/`: `sessions/*.json` (full
 pairing transcripts), `current_session` (pointer), and optional `config.json`
 (`{"order": ["claude","kimi","local"]}`) to reorder reviewer preference.
-
-

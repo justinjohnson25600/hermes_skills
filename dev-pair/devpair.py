@@ -254,6 +254,16 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None,
     cfg = _load_cfg()
     order = cfg.get("order") or DEFAULT_ORDER
 
+    if ad_hoc and explicit:
+        # Two contradictory reviewer choices. Silently honouring one means the
+        # user watches a model they did not pick answer their review, so refuse
+        # and make them say which they meant.
+        sys.exit(
+            f"devpair: --with '{ad_hoc}' and --reviewer '{explicit}' both name a "
+            "reviewer.\n  Pick one: --with for any PROVIDER/MODEL, --reviewer for a "
+            "roster entry."
+        )
+
     if ad_hoc:
         # The user named a model directly: `--with anthropic/claude-opus-5`.
         # No roster entry needed — this is the "use THIS as my pair" path.
@@ -291,7 +301,11 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None,
         if explicit not in REVIEWERS:
             sys.exit(f"devpair: unknown reviewer '{explicit}'. Options: {', '.join(REVIEWERS)}")
         r = dict(REVIEWERS[explicit], key=explicit)
-        r["same_family_as_driver"] = r["family"] == driver["family"]
+        r["same_family_as_driver"] = (r["family"] != "unknown"
+                                      and r["family"] == driver["family"])
+        # A forced roster entry gets the same honesty as a forced --with target:
+        # an opaque family is UNPROVEN, not independent.
+        r["unverifiable"] = r["family"] == "unknown"
         return [r]
 
     out: list[dict] = []
@@ -320,7 +334,17 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None,
             continue
         cand = dict(r, key=key)
         cand["same_family_as_driver"] = False
+        # An opaque roster entry compares as "different family" against every
+        # driver, so it would otherwise be auto-selected as PROVEN independent.
+        # It is not proven — mark it, and sort it behind anything that is.
+        cand["unverifiable"] = r["family"] == "unknown"
         out.append(cand)
+
+    # Stable sort: proven-independent reviewers first, config order preserved
+    # within each group. A user whose roster mixes known and opaque models
+    # always gets the provable one as first choice, without losing the opaque
+    # one as a fallback.
+    out.sort(key=lambda c: c["unverifiable"])
 
     if not out:
         # Every candidate shares the driver's family. Refuse rather than pretend:
@@ -1052,6 +1076,9 @@ def cmd_pair(args) -> int:
         "verdict": parse_verdict(response),
         "blockers": count_blockers(response),
         "unverified_claims": claim_problems,
+        "independence": ("same-family" if used.get("same_family_as_driver")
+                         else "unverified" if used.get("unverifiable")
+                         else "verified"),
         "response": response,
     })
     sess["project"] = os.getcwd()
@@ -1071,6 +1098,9 @@ def cmd_pair(args) -> int:
             "verdict": parse_verdict(response),
             "blockers": count_blockers(response),
             "unverified_claims": claim_problems,
+            "independence": ("same-family" if used.get("same_family_as_driver")
+                             else "unverified" if used.get("unverifiable")
+                             else "verified"),
             "gate_failed": gate_fail,
             "gate_reason": gate_reason,
             "response": response,
@@ -1084,6 +1114,11 @@ def cmd_pair(args) -> int:
         print(bar + "\n")
         print(response)
         print(f"\n{bar}")
+        if used.get("same_family_as_driver"):
+            print(f"  NOT INDEPENDENT — {used['label']} shares the driver's model family.")
+        elif used.get("unverifiable"):
+            print(f"  INDEPENDENCE UNVERIFIED — {used['label']} maps to no known model")
+            print("  family, so it cannot be proven different from the driver.")
         if claim_problems:
             print("  UNVERIFIED CLAIMS — the reviewer cited anchors that do not check out:")
             for c in claim_problems[:8]:

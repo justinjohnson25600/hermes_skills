@@ -797,6 +797,112 @@ def test_with_unverifiable_target_is_flagged(base):
           same["same_family_as_driver"] is True and not same.get("unverifiable"))
 
 
+@isolated
+def test_unverifiable_flag_covers_every_selection_path(base):
+    print("\n[luna-2b] an opaque reviewer is flagged on ALL paths, not just --with")
+    saved = dict(devpair.REVIEWERS)
+    try:
+        devpair.CONFIG.write_text(json.dumps({
+            "reviewers": {
+                # Neither the model name nor the provider maps to a family.
+                "mystery": {"model": "opaque-model-x", "provider": "mystery-gw"},
+                "kimi": {"model": "kimi-k3", "provider": "kimi-coding"},
+            },
+            "order": ["mystery", "kimi"],
+        }))
+        devpair._load_roster()
+        check("opaque roster entry stays honestly 'unknown'",
+              devpair.REVIEWERS["mystery"]["family"] == "unknown",
+              f"got {devpair.REVIEWERS['mystery']['family']!r}")
+        set_driver("claude-opus-5", "anthropic")
+
+        # AUTOMATIC path: the bug was that an unknown family compares as
+        # "different" against every driver and so reads as PROVEN independent.
+        auto = devpair.reviewer_candidates(None)
+        by_key = {c["key"]: c for c in auto}
+        check("auto-selected opaque reviewer is flagged unverifiable",
+              by_key["mystery"].get("unverifiable") is True,
+              "silently offered as independent")
+        check("a provable reviewer is NOT flagged",
+              not by_key["kimi"].get("unverifiable"), "false positive")
+        check("provable reviewer is preferred over the unprovable one",
+              auto[0]["key"] == "kimi", f"first was {auto[0]['key']}")
+        check("the opaque one survives as a fallback, not dropped",
+              "mystery" in by_key, "silently discarded")
+
+        # --reviewer path: forcing it must be just as honest.
+        forced = devpair.reviewer_candidates("mystery")[0]
+        check("--reviewer opaque entry flagged unverifiable",
+              forced.get("unverifiable") is True, "forced pick claimed independent")
+        check("--reviewer known entry not flagged",
+              not devpair.reviewer_candidates("kimi")[0].get("unverifiable"))
+    finally:
+        devpair.REVIEWERS.clear()
+        devpair.REVIEWERS.update(saved)
+
+
+@isolated
+def test_unknown_family_is_never_called_same_family(base):
+    print("\n[luna-2b] 'unknown' must not collide into the same-family branch")
+    saved = dict(devpair.REVIEWERS)
+    try:
+        devpair.CONFIG.write_text(json.dumps({
+            "reviewers": {"mystery": {"model": "opaque-x", "provider": "mystery-gw"}},
+            "order": ["mystery"],
+        }))
+        devpair._load_roster()
+        # Driver family is ALSO unknown here, so a naive `==` would report the
+        # two as the same family and print the wrong warning entirely.
+        set_driver("opaque-x", "mystery-gw")
+        forced = devpair.reviewer_candidates("mystery")[0]
+        check("not mislabelled as same-family",
+              forced["same_family_as_driver"] is False,
+              "unknown == unknown leaked into the same-family branch")
+        check("correctly labelled unverifiable",
+              forced.get("unverifiable") is True)
+    finally:
+        devpair.REVIEWERS.clear()
+        devpair.REVIEWERS.update(saved)
+
+
+@isolated
+def test_independence_state_is_reported_to_callers(base):
+    print("\n[luna-2b] the independence state reaches the human footer and --json")
+    src = Path(devpair.__file__).read_text()
+    check("human footer reports an unverified reviewer",
+          "INDEPENDENCE UNVERIFIED" in src,
+          "user reads the review with no independence caveat")
+    check("human footer reports a same-family reviewer",
+          "NOT INDEPENDENT" in src)
+    check("machine-readable independence field exists",
+          '"independence"' in src, "--json callers cannot tell")
+    # The warning must describe the model that ACTUALLY answered, not the
+    # first choice, because backend fallthrough can change the reviewer.
+    footer = src.split("bar = ")[-1]
+    check("footer keys off `used`, not the original pick",
+          'used.get("unverifiable")' in footer and 'used.get("same_family_as_driver")' in footer,
+          "a fallthrough would report the wrong model's independence")
+
+
+@isolated
+def test_with_and_reviewer_together_refuses(base):
+    print("\n[--with] two contradictory reviewer flags refuse instead of silently picking")
+    set_driver("glm-5.3", "zai")
+    try:
+        devpair.reviewer_candidates("kimi", None, "anthropic/claude-opus-5")
+        check("--with + --reviewer -> SystemExit", False,
+              "silently discarded one of the two choices")
+    except SystemExit as e:
+        check("--with + --reviewer -> SystemExit", True)
+        check("message names both flags",
+              "--with" in str(e) and "--reviewer" in str(e), str(e)[:140])
+    # Each alone still works.
+    check("--with alone still works",
+          devpair.reviewer_candidates(None, None, "anthropic/claude-opus-5")[0]["key"] == "adhoc")
+    check("--reviewer alone still works",
+          devpair.reviewer_candidates("kimi", None, None)[0]["key"] == "kimi")
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -841,6 +947,10 @@ def main():
         test_opaque_roster_entry_cannot_fake_independence,
         test_resolve_family_never_stops_on_unknown,
         test_with_unverifiable_target_is_flagged,
+        test_unverifiable_flag_covers_every_selection_path,
+        test_unknown_family_is_never_called_same_family,
+        test_independence_state_is_reported_to_callers,
+        test_with_and_reviewer_together_refuses,
     ):
         t()
     print("\n" + "=" * 60)

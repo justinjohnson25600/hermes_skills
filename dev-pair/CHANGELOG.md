@@ -7,6 +7,13 @@ Semver, newest first. Patch increments (+0.0.1) per published change.
 Invocation policy and reviewer choice — both driven by how the tool actually
 costs money in practice.
 
+- **`--with` and `--reviewer` together now refuse instead of silently picking
+  one.** Passing both made `--with` win and discarded `--reviewer` without a
+  word, so a user who named two reviewers watched a model they had not chosen
+  answer the review. The tool now exits naming both flags. (Found reviewing the
+  1.1.5 release itself: the flag-conflict case was exactly the "what the tests
+  do not prove" gap called out in that review, and it was real.)
+
 - **The skill is now USER-INVOKED ONLY.** Previous versions instructed agents to
   call devpair "proactively, without being asked", which spends a second model's
   tokens on every non-trivial change — including small ones where the review is
@@ -59,7 +66,26 @@ costs money in practice.
   a user-approved call from an agent-initiated one. SKILL.md and README now say
   so explicitly and point at the tool-approval layer for a hard gate. Conceded
   rather than papered over.
-- Tests: 35 → 40 (158 checks), all passing.
+- **The `unverifiable` fix only covered one of three paths (found by Opus 5 in
+  followup).** 1.1.5 flagged an unprovable reviewer on the `--with` path only.
+  Automatic selection and `--reviewer` still presented an opaque roster entry as
+  independent — and that was the *dangerous* direction, because automatic
+  selection is the default and needs no user typo to trigger. An unknown family
+  compares as "different" against every driver, so `{model: opaque-model-x,
+  provider: mystery-gw}` was silently auto-picked as the proven-independent
+  reviewer. Now:
+  - `unverifiable` is set on all three selection paths.
+  - Proven-independent reviewers sort ahead of unprovable ones, which remain
+    available as fallbacks rather than being dropped.
+  - `same_family_as_driver` no longer treats `unknown == unknown` as a family
+    match, which had misrouted an unknown driver + unknown reviewer into the
+    wrong warning.
+  - The independence state is printed in the human footer *after* the review
+    (where it is actually read) and exposed as `independence` in `--json`, both
+    keyed off the reviewer that actually answered — backend fallthrough could
+    otherwise report the first choice's independence for a different model.
+- Tests: 41 → 44 (175 checks), all passing. The three new tests were confirmed
+  to fail against the pre-fix code before the fix was applied.
 
 ## 1.1.4 — 2026-08-28
 
