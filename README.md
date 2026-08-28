@@ -8,11 +8,48 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 
 | Skill | Version | What it does |
 |---|---|---|
-| [dev-pair](dev-pair/) | 1.1.3 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families |
+| [dev-pair](dev-pair/) | 1.1.4 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families |
 
 ## Installing a skill
 
-Copy the skill folder into `~/.hermes/skills/<category>/<skill-name>/` (or your profile's skills directory) and restart Hermes, or reference it from your own skills registry. Skills that drive a CLI (like dev-pair) document their setup in their own SKILL.md.
+**One line, no clone:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python3 - dev-pair
+```
+
+Or from a clone:
+
+```bash
+python3 install.py --list              # what's available
+python3 install.py dev-pair --dry-run  # show every action, change nothing
+python3 install.py dev-pair            # install
+```
+
+The installer finds this machine's Hermes home (`HERMES_HOME`,
+`%LOCALAPPDATA%\hermes`, `~/.hermes`, or a dotted dir that looks like one),
+installs `SKILL.md` into the right category, and — for skills that ship code —
+installs the code, writes a platform-correct CLI shim, seeds any config from
+this machine's own providers, and runs the skill's test suite as an install
+gate. Re-running upgrades in place.
+
+> Piping a remote script into an interpreter means trusting the source.
+> `install.py` is short and stdlib-only on purpose — read it first if that matters.
+
+**Manual install** works too: copy the skill folder into
+`<hermes-home>/skills/<category>/<skill-name>/`.
+
+### Skill anatomy
+
+| File | Required | Purpose |
+|---|---|---|
+| `SKILL.md` | yes | The skill itself — what the agent loads |
+| `CHANGELOG.md` | yes | Semver history, newest first |
+| `README.md` | for non-trivial skills | Human-facing docs |
+| `skill.json` | only if the skill ships code | Install manifest: files, entrypoint, CLI name, verify command |
+
+Markdown-only skills need no `skill.json` — the installer just places
+`SKILL.md` and stops.
 
 ## Versioning
 

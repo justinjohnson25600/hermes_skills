@@ -2,6 +2,36 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.4 — 2026-08-28
+
+Portability + installer. Until now the tool only ran correctly on the machine
+it was written on.
+
+- **State no longer assumes `~/.hermes`.** `_resolve_hermes_home()` checks
+  `HERMES_HOME`, then `%LOCALAPPDATA%\hermes` (the real layout on Windows —
+  verified on a live box where the home is
+  `C:\Users\<user>\AppData\Local\hermes`), then `~/.hermes`, then any dotted
+  directory that actually *looks* like a Hermes home. Copying the old build to
+  a Windows machine would have written sessions into a directory the agent
+  never reads, silently. `config.yaml` is resolved the same way.
+- **`--cmd` uses the platform's shell.** `bash -lc` on POSIX, `cmd /c` on
+  Windows, which has no bash.
+- **The reviewer roster is machine-local.** `config.json` may declare
+  `reviewers`, which REPLACES the shipped defaults; families are inferred from
+  model or provider when not stated, and malformed entries are dropped rather
+  than trusted. A roster copied between machines named providers that did not
+  exist locally.
+- **Repo-root `install.py` installs any skill** from a `skill.json` manifest:
+  detects the Hermes home, installs `SKILL.md`, installs declared code files,
+  writes a platform-correct CLI shim (`.cmd` on Windows, interpreter-chain
+  bash script on POSIX), generates a starter roster from that machine's own
+  configured providers, then runs the skill's test suite as the install gate
+  and reports honestly if it fails. `--dry-run` and `--list` supported.
+- One-line install (no clone needed):
+  `curl -fsSL <raw>/install.py | python3 - dev-pair`
+- Tests: 32 → 35 (137 checks), all passing. New: HERMES_HOME resolution,
+  machine-local roster, malformed-roster fallback.
+
 ## 1.1.3 — 2026-08-28
 
 Security and correctness pass, from an independent cross-model review

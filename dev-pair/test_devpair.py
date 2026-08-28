@@ -609,6 +609,97 @@ def test_prune_respects_age_and_active_session(base):
           "deleted the session the user is mid-conversation with")
 
 
+# --- PORTABILITY: the tool must find the right home on any machine ----------
+def test_hermes_home_resolution_is_portable():
+    print("\n[portable] state lands in THIS machine's hermes home, not a guess")
+    import importlib
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td) / "custom-home"
+        (fake / "skills").mkdir(parents=True)
+        old = os.environ.get("HERMES_HOME")
+        os.environ["HERMES_HOME"] = str(fake)
+        try:
+            got = devpair._resolve_hermes_home()
+            check("HERMES_HOME wins when set", got == fake, f"got {got}")
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old
+        # A bogus HERMES_HOME must not be trusted blindly.
+        os.environ["HERMES_HOME"] = str(Path(td) / "does-not-exist")
+        try:
+            got = devpair._resolve_hermes_home()
+            check("nonexistent HERMES_HOME falls back", got != Path(td) / "does-not-exist")
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old
+    src = inspect_source(devpair)
+    check("no hardcoded ~/.hermes for the config path",
+          'HOME / ".hermes" / "config.yaml"' not in src,
+          "config.yaml path is still hardcoded")
+    check("--cmd picks a shell per platform", 'os.name == "nt"' in src,
+          "still assumes bash exists")
+
+
+def inspect_source(mod):
+    import inspect as _i
+    return _i.getsource(mod)
+
+
+@isolated
+def test_roster_is_machine_local(base):
+    print("\n[portable] each machine declares its own reviewers")
+    saved = dict(devpair.REVIEWERS)
+    try:
+        devpair.CONFIG.write_text(json.dumps({
+            "reviewers": {
+                "mine": {"model": "some-model", "provider": "my-provider",
+                         "family": "claude", "label": "Mine"},
+                "other": {"model": "kimi-k3", "provider": "kimi-coding"},
+                "junk": {"provider": "no-model-key"},
+            },
+            "order": ["mine", "other"],
+        }))
+        devpair._load_roster()
+        check("config roster REPLACES the shipped defaults",
+              set(devpair.REVIEWERS) == {"mine", "other"}, f"got {set(devpair.REVIEWERS)}")
+        check("entries missing model/provider are dropped",
+              "junk" not in devpair.REVIEWERS)
+        check("family inferred when not declared",
+              devpair.REVIEWERS["other"]["family"] == "kimi",
+              f"got {devpair.REVIEWERS['other'].get('family')}")
+        check("label defaults to provider/model",
+              devpair.REVIEWERS["other"]["label"] == "kimi-coding/kimi-k3")
+        set_driver("glm-5.3", "zai")
+        cands = devpair.reviewer_candidates(None)
+        check("local roster is used for selection",
+              {c["key"] for c in cands} <= {"mine", "other"},
+              f"got {[c['key'] for c in cands]}")
+    finally:
+        devpair.REVIEWERS.clear()
+        devpair.REVIEWERS.update(saved)
+
+
+@isolated
+def test_roster_ignores_empty_or_broken_config(base):
+    print("\n[portable] a broken roster falls back to defaults, never to nothing")
+    saved = dict(devpair.REVIEWERS)
+    try:
+        for payload in ('{"reviewers": {}}', '{"reviewers": "nonsense"}', "{ not json"):
+            devpair.REVIEWERS.clear()
+            devpair.REVIEWERS.update(saved)
+            devpair.CONFIG.write_text(payload)
+            devpair._load_roster()
+            check(f"defaults survive {payload[:18]!r}",
+                  len(devpair.REVIEWERS) == len(saved))
+    finally:
+        devpair.REVIEWERS.clear()
+        devpair.REVIEWERS.update(saved)
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -645,6 +736,9 @@ def main():
         test_budget_caps_total_walltime,
         test_token_estimates_recorded,
         test_prune_respects_age_and_active_session,
+        test_hermes_home_resolution_is_portable,
+        test_roster_is_machine_local,
+        test_roster_ignores_empty_or_broken_config,
     ):
         t()
     print("\n" + "=" * 60)

@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.3
+version: 1.1.4
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux]

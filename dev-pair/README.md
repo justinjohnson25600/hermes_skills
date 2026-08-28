@@ -41,42 +41,60 @@ Three design decisions do the heavy lifting:
 
 ## Installation
 
-### Prerequisites
-
-- [Hermes Agent](https://hermes-agent.nousresearch.com/docs) installed, with its `hermes` CLI on your PATH
-- python3.11+ with PyYAML
-- git (for the diff-based modes)
-- At least **two** configured model providers of different families (e.g. an Anthropic key and a Kimi key) — one to drive, one to review
-
-### Steps
+### Quickest — one line
 
 ```bash
-# 1. Install the tool
-mkdir -p ~/.hermes/devpair
-cp devpair.py ~/.hermes/devpair/
-
-# 2. Install the wrapper onto your PATH
-cp devpair ~/.local/bin/devpair
-chmod +x ~/.local/bin/devpair
-
-# 3. Point the wrapper at your install (if you used a different path)
-#    export DEVPAIR_PY=/path/to/devpair.py   — or edit the variable at the top
-
-# 4. Edit the REVIEWERS dict near the top of devpair.py to match the
-#    provider IDs and model names in YOUR ~/.hermes/config.yaml
-
-# 5. Verify every backend answers
-devpair doctor
+curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python3 - dev-pair
 ```
 
-The wrapper smoke-tests a chain of python interpreters (`import encodings` must succeed) so a half-broken venv can't kill the tool with cryptic getpath errors.
+That detects your Hermes home, installs the skill and its code, writes the
+`devpair` CLI, generates a reviewer roster from **your** configured providers,
+and runs the 35-test suite as an install gate. Then:
 
-Optional: install the skill folder itself (`SKILL.md`) into `~/.hermes/skills/software-development/dev-pair/` so your Hermes agent loads it automatically and knows when/how to call the tool proactively.
+```bash
+devpair doctor          # confirm your backends answer
+```
+
+> Piping a remote script into an interpreter means trusting the source.
+> `install.py` is short and stdlib-only on purpose — read it first if that matters.
+
+### Prerequisites
+
+- [Hermes Agent](https://hermes-agent.nousresearch.com/docs) with `hermes` on PATH
+- Python 3.8+ with PyYAML
+- git (for the diff-based modes)
+- At least **two** configured providers of different model families — one to drive, one to review. With fewer, devpair refuses rather than fake independence.
+
+### Manual install
+
+```bash
+mkdir -p <hermes-home>/devpair
+cp devpair.py test_devpair.py <hermes-home>/devpair/
+# put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
+python3 <hermes-home>/devpair/test_devpair.py    # 137 checks, no network
+```
 
 ### Configuration
 
-- **`~/.hermes/devpair/config.json`** (optional): `{"order": ["claude", "kimi", "local"]}` reorders reviewer preference. Reviewers not listed are still used as fallback candidates.
-- **Driver identity** is resolved from `--driver` flag → `DEVPAIR_DRIVER_MODEL`/`DEVPAIR_DRIVER_PROVIDER` env vars → `config.yaml` `model.default`, in that order.
+`<hermes-home>/devpair/config.json` — written for you by the installer:
+
+```json
+{
+  "reviewers": {
+    "claude": {"model": "claude-sonnet-4.6", "provider": "anthropic", "family": "claude"},
+    "kimi":   {"model": "kimi-k3", "provider": "kimi-coding", "family": "kimi"}
+  },
+  "order": ["kimi", "claude"]
+}
+```
+
+`reviewers` **replaces** the built-in roster, so every machine names its own providers — the IDs must match your `config.yaml`. `order` sets preference; reviewers not listed are still used as fallbacks. `family` is inferred from the model or provider when omitted.
+
+**Driver identity** resolves from `--driver` → `DEVPAIR_DRIVER_MODEL`/`DEVPAIR_DRIVER_PROVIDER` → `config.yaml` `model.default`.
+
+### Where state lives
+
+devpair finds your Hermes home in this order: `HERMES_HOME` → `%LOCALAPPDATA%\hermes` (Windows) → `~/.hermes` → any dotted directory that looks like a Hermes home. Sessions live at `<hermes-home>/devpair/sessions/`.
 
 ## Usage
 
@@ -216,7 +234,7 @@ The active session is never pruned, regardless of age.
 ## Safety model
 
 - The **reviewer** is read-only by construction (empty toolset). It cannot touch your machine.
-- **Secrets are redacted before they leave your machine.** Everything the harness gathers passes through `redact_secrets()` at a single chokepoint: vendor token shapes (`sk-`, `ghp_`, `AKIA`, `xox`, `AIza`, `ya29`, JWTs), private-key blocks, passwords embedded in URLs, secret-looking `KEY=value` assignments, and `Authorization:` headers are replaced with `[REDACTED:kind]`, and you're told how many were caught. Key *names* and URL hosts survive so the reviewer can still reason about the code. Obvious placeholders (`<your-key-here>`, `changeme`) are left alone.
+- **Secrets are redacted before they leave your machine.** Everything the harness gathers passes through `redact_secrets()` at a single chokepoint: vendor token shapes (`sk-`, `ghp_`, `AKIA`, `xox`, `AIza`, `ya29`, JWTs), private-key blocks, passwords embedded in URLs, secret-looking `KEY=value` assignments, and `Authorization:*** headers are replaced with `[REDACTED:kind]`, and you're told how many were caught. Key *names* and URL hosts survive so the reviewer can still reason about the code. Obvious placeholders (`<your-key-here>`, `changeme`) are left alone.
   This is defence in depth, **not a guarantee** — a novel credential format can still slip through. If you work in a repo full of live secrets, look at what you're sending before you send it.
 - **Independence fails closed.** If the driver's model family can't be identified (from the model name, then the provider), the tool refuses rather than offering an unprovable guarantee. Pass `--driver` to resolve it.
 - The **harness** gathers context locally, and **`--cmd` runs whatever shell command you give it with your own privileges** — that flag is for you, and it is not sandboxed. Never pass a command you wouldn't run yourself.
@@ -239,15 +257,16 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 32 regression tests (125 checks), no network required
+python3.11 test_devpair.py     # 35 regression tests (137 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.3**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.4**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 
 MIT — see [../LICENSE](../LICENSE).
+

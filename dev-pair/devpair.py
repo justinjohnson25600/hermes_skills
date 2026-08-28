@@ -34,7 +34,42 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
-BASE = HOME / ".hermes" / "devpair"
+
+
+def _resolve_hermes_home() -> Path:
+    """Find THIS machine's Hermes home. Layouts differ per platform/install:
+    ~/.hermes on most POSIX boxes, %LOCALAPPDATA%\\hermes on Windows, and some
+    installs mask or relocate it. Guessing wrong means writing state into a
+    directory the agent never reads, silently.
+
+    Order: HERMES_HOME env > a dotted/known dir that actually looks like a
+    Hermes home > ~/.hermes as a last resort.
+    """
+    env = os.environ.get("HERMES_HOME")
+    if env and Path(env).is_dir():
+        return Path(env)
+
+    candidates: list[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(Path(local) / "hermes")
+    candidates.append(HOME / ".hermes")
+    # Some installs display-mask the config home; find it by shape, not name.
+    try:
+        candidates.extend(sorted(p for p in HOME.glob(".*") if p.is_dir()))
+    except OSError:
+        pass
+
+    for c in candidates:
+        try:
+            if c.is_dir() and ((c / "config.yaml").is_file() or (c / "skills").is_dir()):
+                return c
+        except OSError:
+            continue
+    return HOME / ".hermes"
+
+
+BASE = _resolve_hermes_home() / "devpair"
 SESSIONS = BASE / "sessions"
 CONFIG = BASE / "config.json"
 CURRENT = BASE / "current_session"
@@ -79,6 +114,42 @@ REVIEWERS = {
 DEFAULT_ORDER = ["kimi", "claude", "local"]
 
 
+def _load_roster() -> None:
+    """Let each machine declare its OWN reviewers in config.json.
+
+    Providers differ per install, so a hardcoded roster is wrong the moment the
+    tool leaves the box it was written on. `reviewers` REPLACES the defaults;
+    the shipped dict is only a starting example.
+
+    config.json:
+      {"reviewers": {"claude": {"model": "...", "provider": "...",
+                                "family": "claude", "label": "..."}},
+       "order": ["claude", "kimi"]}
+    """
+    cfg = _load_cfg()
+    custom = cfg.get("reviewers")
+    if not isinstance(custom, dict) or not custom:
+        return
+    valid: dict[str, dict] = {}
+    for key, r in custom.items():
+        if not isinstance(r, dict):
+            continue
+        if not r.get("model") or not r.get("provider"):
+            continue
+        valid[key] = {
+            "model": r["model"],
+            "provider": r["provider"],
+            # Infer the family when not declared, so a roster entry cannot
+            # accidentally claim independence it does not have.
+            "family": r.get("family") or _family_of(r["model"])
+                      or _family_of_provider(r["provider"]),
+            "label": r.get("label") or f"{r['provider']}/{r['model']}",
+        }
+    if valid:
+        REVIEWERS.clear()
+        REVIEWERS.update(valid)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
@@ -99,7 +170,7 @@ def driver_identity(explicit: str | None = None) -> dict:
     default. The config default is only a guess — the live session model is what
     must be passed in, or the same-family guard silently protects the wrong model.
     """
-    cfg_path = HOME / ".hermes" / "config.yaml"
+    cfg_path = _resolve_hermes_home() / "config.yaml"
     model, provider = "unknown", "unknown"
     try:
         import yaml  # type: ignore
@@ -499,7 +570,10 @@ def gather(args) -> tuple[str, list[str]]:
         parts.append(f"## THE FAILURE / ERROR OUTPUT\n```\n{clip(body, 20000, 'error')}\n```")
 
     if args.cmd:
-        out, note = sh(["bash", "-lc", args.cmd], cwd, want_status=True)
+        # No bash on a stock Windows box; use the native shell there.
+        shell_cmd = (["cmd", "/c", args.cmd] if os.name == "nt"
+                     else ["bash", "-lc", args.cmd])
+        out, note = sh(shell_cmd, cwd, want_status=True)
         body = out or "(no stdout)"
         if note:
             body += f"\n\n[command FAILED — {note}]"
@@ -1054,6 +1128,9 @@ def cmd_prune(args) -> int:
 
 
 def main() -> int:
+    # Apply this machine's roster BEFORE argparse reads REVIEWERS for --reviewer
+    # choices, or a locally-declared reviewer would be rejected as unknown.
+    _load_roster()
     ap = argparse.ArgumentParser(
         prog="devpair",
         description="The second pair of eyes — supervisory review on a different LLM.",
