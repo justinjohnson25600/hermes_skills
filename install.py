@@ -144,6 +144,91 @@ def write_shim(name: str, target: Path, py: str, dry: bool) -> Path:
     return dest
 
 
+def _families_from_config(home: Path) -> dict[str, dict]:
+    """Derive real reviewer entries from this machine's config.yaml.
+
+    Two shapes matter and both appear in the wild:
+      providers:            <- a map of configured provider IDs
+        anthropic: {...}
+      fallback_providers:   <- a list of provider/model pairs already proven
+        - provider: zai-indirect
+          model: glm-5.3
+    The fallback list is the better source when present: those pairs are known
+    to work on this box, so we prefer them over guessed model names.
+    """
+    known_family = [
+        ("claude", ("anthropic", "claude")),
+        ("kimi", ("kimi-coding", "kimi", "moonshot")),
+        ("glm", ("zai-indirect", "zai", "zhipu", "glm")),
+        ("gpt", ("openai-codex", "openai", "azure")),
+        ("qwen", ("qwen", "dashscope", "unsloth", "lmstudio")),
+        ("gemini", ("gemini", "google", "vertex")),
+    ]
+    default_model = {"claude": "claude-sonnet-4.6", "kimi": "kimi-k3",
+                     "glm": "glm-5.3", "gpt": "gpt-5.6-luna",
+                     "qwen": "qwen3.8-9b", "gemini": "gemini-2.5-pro"}
+
+    def family_of(provider: str) -> str | None:
+        p = (provider or "").lower()
+        for fam, names in known_family:
+            if any(n in p for n in names):
+                return fam
+        return None
+
+    roster: dict[str, dict] = {}
+    yml = home / "config.yaml"
+    if not yml.is_file():
+        return roster
+    try:
+        lines = yml.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return roster
+
+    # Pass 1 — fallback_providers / model: real provider+model pairs.
+    pending_provider = None
+    in_list = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if line and not line[0].isspace():
+            in_list = stripped.startswith(("fallback_providers:", "model:"))
+            pending_provider = None
+            continue
+        if not in_list:
+            continue
+        if "provider:" in stripped:
+            pending_provider = stripped.split("provider:", 1)[1].strip().strip("\"'")
+        elif "model:" in stripped and pending_provider:
+            model = stripped.split("model:", 1)[1].strip().strip("\"'")
+            fam = family_of(pending_provider)
+            if fam and fam not in roster and model:
+                roster[fam] = {"model": model, "provider": pending_provider,
+                               "family": fam, "label": f"{pending_provider}/{model}"}
+            pending_provider = None
+
+    # Pass 2 — a providers: map, for families the fallback list didn't cover.
+    in_providers = False
+    for line in lines:
+        if line.startswith("#"):
+            continue
+        if line.startswith("providers:"):
+            in_providers = True
+            continue
+        if in_providers:
+            if line and not line[0].isspace():
+                break
+            if line.startswith("  ") and not line.startswith("    ") \
+                    and line.strip().endswith(":"):
+                prov = line.strip().rstrip(":")
+                fam = family_of(prov)
+                if fam and fam not in roster:
+                    roster[fam] = {"model": default_model.get(fam, "unknown"),
+                                   "provider": prov, "family": fam,
+                                   "label": f"{prov}/{default_model.get(fam, '')}"}
+    return roster
+
+
 def build_reviewer_config(home: Path, state_dir: Path, dry: bool) -> None:
     """Seed dev-pair's roster from THIS machine's configured providers.
 
@@ -155,38 +240,7 @@ def build_reviewer_config(home: Path, state_dir: Path, dry: bool) -> None:
         log("roster: config.json already present, leaving it alone")
         return
 
-    known = [
-        ("claude", "claude-sonnet-4.6", ("anthropic",), "claude"),
-        ("kimi", "kimi-k3", ("kimi-coding", "kimi", "moonshot"), "kimi"),
-        ("glm", "glm-5.3", ("zai-indirect", "zai", "zhipu"), "glm"),
-        ("gpt", "gpt-5.6-luna", ("openai-codex", "openai"), "gpt"),
-    ]
-    providers: set[str] = set()
-    yml = home / "config.yaml"
-    if yml.is_file():
-        try:
-            text = yml.read_text(encoding="utf-8", errors="replace")
-            in_providers = False
-            for line in text.splitlines():
-                if line.startswith("providers:"):
-                    in_providers = True
-                    continue
-                if in_providers:
-                    if line and not line[0].isspace():
-                        in_providers = False
-                    elif line.startswith("  ") and line.strip().endswith(":") \
-                            and not line.startswith("    "):
-                        providers.add(line.strip().rstrip(":"))
-        except Exception:
-            pass
-
-    roster: dict[str, dict] = {}
-    for key, model, prov_names, family in known:
-        for p in prov_names:
-            if p in providers:
-                roster[key] = {"model": model, "provider": p,
-                               "family": family, "label": f"{p}/{model}"}
-                break
+    roster = _families_from_config(home)
 
     if len(roster) < 2:
         log("roster: fewer than 2 provider families detected — writing a TEMPLATE.")
@@ -204,6 +258,8 @@ def build_reviewer_config(home: Path, state_dir: Path, dry: bool) -> None:
         payload = {"reviewers": roster, "order": list(roster)}
         log(f"roster: detected {len(roster)} independent families "
             f"({', '.join(roster)})")
+        for k, v in roster.items():
+            log(f"        {k:8s} -> {v['provider']}/{v['model']}")
 
     if dry:
         log(f"DRY-RUN would write {cfg_file}")
