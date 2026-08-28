@@ -140,9 +140,11 @@ def _load_roster() -> None:
             "model": r["model"],
             "provider": r["provider"],
             # Infer the family when not declared, so a roster entry cannot
-            # accidentally claim independence it does not have.
-            "family": r.get("family") or _family_of(r["model"])
-                      or _family_of_provider(r["provider"]),
+            # accidentally claim independence it does not have. NOTE: _family_of
+            # returns the STRING "unknown", which is truthy — an `or` chain here
+            # would stop at it and hand back a reviewer of unprovable family.
+            "family": (r.get("family")
+                       or _resolve_family(r["model"], r["provider"])),
             "label": r.get("label") or f"{r['provider']}/{r['model']}",
         }
     if valid:
@@ -200,6 +202,16 @@ def driver_identity(explicit: str | None = None) -> dict:
         # which aliases cannot disguise.
         family = _family_of_provider(provider)
     return {"model": model, "provider": provider, "family": family}
+
+
+def _resolve_family(model: str, provider: str) -> str:
+    """Model name first, then provider. Returns "unknown" only when neither
+    identifies a family — callers must treat that as unproven, never as
+    independent."""
+    fam = _family_of(model)
+    if fam == "unknown":
+        fam = _family_of_provider(provider)
+    return fam
 
 
 def _family_of_provider(provider: str) -> str:
@@ -263,13 +275,15 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None,
                 f"devpair: --with '{ad_hoc}' has no provider and '{model}' is not in "
                 "your roster.\n  Use PROVIDER/MODEL, e.g. --with anthropic/claude-sonnet-4.6"
             )
-        family = _family_of(model) or _family_of_provider(provider)
-        if family == "unknown":
-            family = _family_of_provider(provider)
+        family = _resolve_family(model, provider)
         cand = {
             "key": "adhoc", "model": model, "provider": provider,
             "family": family, "label": f"{provider}/{model}",
             "same_family_as_driver": family != "unknown" and family == driver["family"],
+            # Neither the model nor the provider identifies a family, so this
+            # reviewer's independence is UNPROVEN. The user asked for it by
+            # name so we proceed, but we must not imply a guarantee.
+            "unverifiable": family == "unknown",
         }
         return [cand]
 
@@ -950,12 +964,24 @@ def cmd_pair(args) -> int:
         print(f"reviewer : {reviewer['label']}  {reviewer['provider']}/{reviewer['model']}")
         if reviewer.get("same_family_as_driver"):
             print("  WARNING: forced same-family review — not independent.")
+        elif reviewer.get("unverifiable"):
+            print("  WARNING: independence UNVERIFIED — neither the model name nor "
+                  "the provider identifies a family.")
         if len(order) > 1:
             print("fallbacks: " + ", ".join(c["label"] for c in order[1:]))
         print(f"mode     : {mode}")
         print(f"context  : {len(context):,} chars")
         print(f"session  : {spath.stem} (turn {len(sess.get('turns', [])) + 1})")
         return 0
+
+    if reviewer.get("unverifiable"):
+        print(
+            f"[devpair] WARNING: cannot verify that {reviewer['label']} is independent of "
+            f"the driver ({driver['model']}) — neither its model name nor its provider "
+            f"maps to a known family. Proceeding because you named it explicitly, but "
+            f"this review carries no independence guarantee.",
+            file=sys.stderr,
+        )
 
     if reviewer.get("same_family_as_driver"):
         print(

@@ -73,7 +73,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 137 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 158 checks, no network
 ```
 
 ### Configuration
@@ -150,6 +150,11 @@ pair?") and then wait. Nothing happens until you say yes.
 
 This is deliberate. An always-on reviewer doubles the bill on renames and typo
 fixes, and a review nobody asked for is a review nobody reads.
+
+**Caveat, stated plainly:** this is enforced by instruction, not by code. The
+CLI has no way to distinguish a user-approved call from an agent-initiated one,
+so a misbehaving agent could still run it. If you want a hard guarantee, gate
+the `devpair` command at your tool-approval layer.
 
 ### 3. From your own terminal
 
@@ -352,7 +357,7 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 37 regression tests (148 checks), no network required
+python3.11 test_devpair.py     # 40 regression tests (158 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.

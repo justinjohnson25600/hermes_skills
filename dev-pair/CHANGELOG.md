@@ -37,7 +37,29 @@ costs money in practice.
   `~/.hermes/devpair/sessions` despite 1.1.4 making the home portable; the live
   mac-mini SKILL.md was stamped 1.1.5 while still carrying the removed
   "call proactively" text. `.pytest_cache/` added to `.gitignore`.
-- Tests: 35 → 37 (148 checks), all passing.
+- **Post-release review by GPT-5.6 Luna (the tool reviewing itself) found three
+  more defects, all reproduced before fixing:**
+  - `_load_roster()` inferred a family with an `or` chain, but `_family_of()`
+    returns the *string* `"unknown"`, which is truthy — so a roster entry like
+    `{model: my-fast-coder, provider: anthropic}` with no declared `family`
+    stayed `"unknown"` and was offered to a Claude driver as independent. This
+    is the same bug class fixed for the driver path in 1.1.3, through a third
+    door. Added `_resolve_family(model, provider)`, used by both the roster
+    loader and `--with`.
+  - `--with` on a target whose model *and* provider are both unrecognised was
+    silently presented as independent. It now carries an `unverifiable` flag and
+    warns that independence cannot be established, while still proceeding —
+    an explicit user instruction is honoured, but never dressed up as a
+    guarantee.
+  - Docs: a stale check count, an unmatched trailing quote that made the
+    `--with` example uncopyable, and a hardcoded `~/.hermes` that contradicted
+    1.1.4's portable-home work.
+- **`USER-INVOKED ONLY` is now labelled honestly.** Luna's strongest point: it
+  is a behavioural instruction, not a technical guarantee — the CLI cannot tell
+  a user-approved call from an agent-initiated one. SKILL.md and README now say
+  so explicitly and point at the tool-approval layer for a hard gate. Conceded
+  rather than papered over.
+- Tests: 35 → 40 (158 checks), all passing.
 
 ## 1.1.4 — 2026-08-28
 

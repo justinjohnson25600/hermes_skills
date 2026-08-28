@@ -743,6 +743,60 @@ def test_with_model_bad_input_refuses_clearly(base):
           c[0]["provider"] == "kimi-coding", f"got {c[0]}")
 
 
+# --- Luna's findings: unknown family must never read as independent ---------
+@isolated
+def test_opaque_roster_entry_cannot_fake_independence(base):
+    print("\n[luna-1] a roster alias with no family infers from its provider")
+    saved = dict(devpair.REVIEWERS)
+    try:
+        devpair.CONFIG.write_text(json.dumps({
+            "reviewers": {
+                # opaque model, Claude-backed provider, family NOT declared
+                "sneaky": {"model": "my-fast-coder", "provider": "anthropic"},
+                "kimi": {"model": "kimi-k3", "provider": "kimi-coding"},
+            },
+            "order": ["sneaky", "kimi"],
+        }))
+        devpair._load_roster()
+        check("family inferred from provider, not left 'unknown'",
+              devpair.REVIEWERS["sneaky"]["family"] == "claude",
+              f"got {devpair.REVIEWERS['sneaky']['family']!r}")
+        set_driver("claude-opus-5", "anthropic")
+        keys = [c["key"] for c in devpair.reviewer_candidates(None)]
+        check("claude-backed alias NOT offered to a claude driver",
+              "sneaky" not in keys, f"got {keys}")
+        check("the genuinely independent reviewer still is", "kimi" in keys)
+    finally:
+        devpair.REVIEWERS.clear()
+        devpair.REVIEWERS.update(saved)
+
+
+@isolated
+def test_resolve_family_never_stops_on_unknown(base):
+    print("\n[luna-1] _resolve_family falls through 'unknown' (it is a truthy string)")
+    check("opaque model + known provider -> provider family",
+          devpair._resolve_family("some-alias", "anthropic") == "claude")
+    check("known model wins over provider",
+          devpair._resolve_family("kimi-k3", "anthropic") == "kimi")
+    check("both opaque -> unknown", devpair._resolve_family("x", "y") == "unknown")
+
+
+@isolated
+def test_with_unverifiable_target_is_flagged(base):
+    print("\n[luna-2] --with an unidentifiable model is flagged, not assumed safe")
+    set_driver("claude-opus-5", "anthropic")
+    c = devpair.reviewer_candidates(None, None, "mystery-gateway/new-model")[0]
+    check("family is honestly 'unknown'", c["family"] == "unknown")
+    check("flagged unverifiable", c.get("unverifiable") is True,
+          "silently presented as independent")
+    known = devpair.reviewer_candidates(None, None, "kimi-coding/kimi-k3")[0]
+    check("a known-family target is NOT flagged",
+          not known.get("unverifiable"), "false positive")
+    same = devpair.reviewer_candidates(None, None, "anthropic/claude-sonnet-4.6")[0]
+    check("same-family still flagged separately",
+          same["same_family_as_driver"] is True and not same.get("unverifiable"))
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -784,6 +838,9 @@ def main():
         test_roster_ignores_empty_or_broken_config,
         test_with_model_is_user_choice,
         test_with_model_bad_input_refuses_clearly,
+        test_opaque_roster_entry_cannot_fake_independence,
+        test_resolve_family_never_stops_on_unknown,
+        test_with_unverifiable_target_is_flagged,
     ):
         t()
     print("\n" + "=" * 60)

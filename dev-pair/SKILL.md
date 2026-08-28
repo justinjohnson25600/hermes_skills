@@ -21,6 +21,12 @@ Every devpair run spends a second model's tokens on top of your own. On small
 or routine work that is pure waste, and the decision to spend it belongs to the
 user, not to you. Load this skill for the how; wait to be asked for the when.
 
+> **Honest limitation:** this is a behavioural instruction, not a technical
+> guarantee. The CLI cannot tell a user-approved call from an agent-initiated
+> one — nothing in `devpair.py` enforces it. If you need a hard guarantee, gate
+> the command at your tool-approval layer, where authorisation is observable.
+> Treat what follows as policy that a well-behaved agent follows, not a lock.
+
 **Run it only when the user explicitly asks**, in words like:
 "get a second opinion", "run it past the dev pair", "devpair this",
 "have another model review this", "what does the pair think".
@@ -106,7 +112,7 @@ devpair alt      --ask "cron job or long-running daemon?"
 devpair followup --ask "Fixed 1 and 3. Disagree with 2 because ..."
 
 # user picked the pair themselves:
-devpair review   --diff --with anthropic/claude-opus-5"
+devpair review   --diff --with anthropic/claude-opus-5
 
 devpair log            # everything the pair has said this session
 devpair reset          # fresh pairing session (new feature = new session)
@@ -207,7 +213,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 - **Secrets are redacted before send.** Everything gathered passes through
   `redact_secrets()` at one chokepoint: vendor tokens (`sk-`, `ghp_`, `AKIA`,
   `xox`, `AIza`, `ya29`), JWTs, private-key blocks, URL passwords, secret-looking
-  `KEY=value` assignments and `Authorization:*** headers become `[REDACTED:kind]`.
+  `KEY=value` assignments and `Authorization:` headers become `[REDACTED:kind]`.
   A stderr note reports the count. This is defence in depth, not a guarantee —
   if the repo is full of live credentials, check the evidence before sending.
 - **Independence fails closed.** If the driver's family can't be identified from
@@ -228,7 +234,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 37 regression tests (148 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 40 regression tests (158 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -236,12 +242,12 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 37 regression tests (148 checks)
+- `test_devpair.py` — 40 regression tests (158 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
 
-State at runtime lives under `~/.hermes/devpair/`: `sessions/*.json` (full
+State at runtime lives under `<hermes-home>/devpair/`: `sessions/*.json` (full
 pairing transcripts), `current_session` (pointer), and optional `config.json`
 (`{"order": ["claude","kimi","local"]}`) to reorder reviewer preference.
 
