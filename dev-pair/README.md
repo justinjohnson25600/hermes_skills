@@ -10,6 +10,8 @@ dev-pair fixes this by construction: the agent doing the work (the **driver**) s
 
 It is **supervision, not duplication**: the reviewer never writes code, never edits files, and physically cannot — it runs with an empty toolset, so all it can do is read the evidence you hand it and respond.
 
+**It only runs when you ask.** Every review spends a second model's tokens on top of your agent's, so the skill instructs agents never to invoke it on their own initiative — at most they may *offer*. You decide when a second opinion is worth paying for, and with `--with` you decide which model gives it.
+
 ## How it works
 
 ```
@@ -108,6 +110,16 @@ devpair review --diff --driver kimi-coding/kimi-k3
 
 The config-file default is a guess; if your session runs a different model than the config default, the same-family guard will protect the wrong model unless you pass `--driver`. Any Hermes agent calling this tool knows its own model and must pass it.
 
+### Choosing your reviewer
+
+```bash
+devpair review --diff --with anthropic/claude-opus-5   # use exactly this model
+devpair review --diff --reviewer kimi                  # a roster entry by name
+devpair review --diff                                  # let it pick an independent one
+```
+
+`--with` accepts any `PROVIDER/MODEL` your Hermes install can reach, whether or not it is in your roster, and overrides roster ordering. If the model shares the driver's family it warns and proceeds — your explicit instruction wins.
+
 ### The five modes
 
 **`critique`** — before building. Pressure-test the plan while changing it is still cheap:
@@ -180,7 +192,8 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 |---|---|
 | `--driver PROVIDER/MODEL` | Declare the live session model (see the one rule) |
 | `--focus "concurrency"` | Steer attention; critical off-focus findings still reported |
-| `--reviewer NAME` | Force a specific reviewer (deliberate same-family override, warned) |
+| `--with PROVIDER/MODEL` | Use **this** model as the pair — roster or not. Your explicit choice; same-family warns but proceeds |
+| `--reviewer NAME` | Pick a reviewer from your roster |
 | `--session NAME` | Named session for parallel workstreams |
 | `--timeout N` | Per-backend timeout, default 420s (use 900 for small local models) |
 | `--budget N` | Total wall-clock across ALL backends; stops a dead chain burning `timeout × candidates` |
@@ -257,14 +270,14 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 35 regression tests (137 checks), no network required
+python3.11 test_devpair.py     # 37 regression tests (148 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.4**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

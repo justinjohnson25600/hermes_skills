@@ -2,6 +2,30 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.5 — 2026-08-28
+
+Invocation policy and reviewer choice — both driven by how the tool actually
+costs money in practice.
+
+- **The skill is now USER-INVOKED ONLY.** Previous versions instructed agents to
+  call devpair "proactively, without being asked", which spends a second model's
+  tokens on every non-trivial change — including small ones where the review is
+  worth nothing. The skill now states plainly: never self-initiate; if a review
+  looks warranted, *offer it in one sentence and stop*. The trigger table that
+  read as a standing instruction has been replaced with a mode-selection table
+  used only once the user has asked.
+- **`--with PROVIDER/MODEL` lets the user name the pair directly.** It does not
+  need to be in the roster, and it outranks roster order. Same-family choices
+  (a Claude driver reviewed by Claude) warn but proceed — an explicit
+  instruction is the user's call, not the tool's. A bare model name resolves its
+  provider from the roster when possible, and refuses with the correct form when
+  not.
+- `followup` is documented as another paid call — offer it, don't fire it
+  automatically.
+- Cost guidance added: prefer `--files` over a wide `--diff`, and `--dry-run`
+  shows the reviewer and context size for free.
+- Tests: 35 → 37 (148 checks), all passing.
+
 ## 1.1.4 — 2026-08-28
 
 Portability + installer. Until now the tool only ran correctly on the machine

@@ -700,6 +700,49 @@ def test_roster_ignores_empty_or_broken_config(base):
         devpair.REVIEWERS.update(saved)
 
 
+# --- user-chosen reviewer (--with) -------------------------------------------
+@isolated
+def test_with_model_is_user_choice(base):
+    print("\n[--with] the user can name any model as the pair")
+    set_driver("glm-5.3", "zai")
+    c = devpair.reviewer_candidates(None, None, "anthropic/claude-opus-5")
+    check("single candidate, exactly what was asked for", len(c) == 1)
+    check("provider parsed", c[0]["provider"] == "anthropic", f"got {c[0]}")
+    check("model parsed", c[0]["model"] == "claude-opus-5", f"got {c[0]}")
+    check("family inferred", c[0]["family"] == "claude", f"got {c[0]['family']}")
+    check("works for a model NOT in the roster",
+          c[0]["model"] not in [r["model"] for r in devpair.REVIEWERS.values()])
+
+    # Same-family must WARN, not block — the user's explicit instruction wins.
+    set_driver("claude-opus-5", "anthropic")
+    c2 = devpair.reviewer_candidates(None, None, "anthropic/claude-sonnet-4.6")
+    check("same-family --with is allowed", len(c2) == 1)
+    check("but it is flagged as not independent",
+          c2[0]["same_family_as_driver"] is True)
+
+    # An opaque provider still resolves rather than silently claiming independence.
+    c3 = devpair.reviewer_candidates(None, None, "kimi-coding/some-new-kimi")
+    check("family falls back to the provider", c3[0]["family"] == "kimi",
+          f"got {c3[0]['family']}")
+
+
+@isolated
+def test_with_model_bad_input_refuses_clearly(base):
+    print("\n[--with] a bare unknown model refuses with a usable message")
+    set_driver("glm-5.3", "zai")
+    try:
+        devpair.reviewer_candidates(None, None, "not-a-real-model")
+        check("bare unknown model -> SystemExit", False, "accepted it silently")
+    except SystemExit as e:
+        check("bare unknown model -> SystemExit", True)
+        check("message shows the PROVIDER/MODEL form", "PROVIDER/MODEL" in str(e),
+              str(e)[:120])
+    # A bare model that IS in the roster resolves its provider for convenience.
+    c = devpair.reviewer_candidates(None, None, "kimi-k3")
+    check("bare roster model resolves its provider",
+          c[0]["provider"] == "kimi-coding", f"got {c[0]}")
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -739,6 +782,8 @@ def main():
         test_hermes_home_resolution_is_portable,
         test_roster_is_machine_local,
         test_roster_ignores_empty_or_broken_config,
+        test_with_model_is_user_choice,
+        test_with_model_bad_input_refuses_clearly,
     ):
         t()
     print("\n" + "=" * 60)

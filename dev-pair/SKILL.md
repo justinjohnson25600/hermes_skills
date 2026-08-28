@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.4
+version: 1.1.5
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux]
@@ -15,16 +15,45 @@ metadata:
 
 ## When to Use
 
-Load this skill whenever you are about to build, review, debug, or choose
-between designs for anything non-trivial — and call `devpair` in **proactively**,
-without being asked. See the table below for the exact trigger moments.
+**This skill is USER-INVOKED ONLY. Never call `devpair` on your own initiative.**
 
-`devpair` is a supervisory review partner that runs on a **different LLM** than the
-agent doing the work. It critiques direction, challenges approach, finds bugs, and
-asks the questions that expose gaps.
+Every devpair run spends a second model's tokens on top of your own. On small
+or routine work that is pure waste, and the decision to spend it belongs to the
+user, not to you. Load this skill for the how; wait to be asked for the when.
+
+**Run it only when the user explicitly asks**, in words like:
+"get a second opinion", "run it past the dev pair", "devpair this",
+"have another model review this", "what does the pair think".
+
+If you believe a review is genuinely warranted — a security boundary, a
+concurrency change, a migration, a bug that has survived two fixes — **offer it
+in one sentence and stop**: "Want me to run this past the dev pair before we
+commit?" Then do nothing until they answer. Do not run it to be thorough, do
+not run it because the change feels big, and never run it as a habit.
+
+`devpair` is a supervisory review partner that runs on a **different LLM** than
+the agent doing the work. It critiques direction, challenges approach, finds
+bugs, and asks the questions that expose gaps.
 
 It does **not** write the implementation and does **not** do the work twice.
 It is supervision, not duplication.
+
+## Choosing the reviewer — the user decides
+
+If the user names a model, use it. That instruction outranks the roster, the
+config order, and the same-family guard:
+
+```bash
+devpair review --diff --driver <live-model> --with anthropic/claude-opus-5
+```
+
+`--with PROVIDER/MODEL` uses that model whether or not it is in the roster.
+Same-family (a Claude driver reviewed by Claude) prints a warning and proceeds —
+it is the user's call, not a hard block.
+
+If they name a roster entry instead ("use kimi"), `--reviewer kimi` is the
+shorter form. If they express no preference, let the tool pick the first
+independent reviewer and **tell them which model answered** so they can redirect.
 
 ## Setup
 
@@ -39,25 +68,25 @@ It is supervision, not duplication.
 
 Requires: Hermes Agent CLI on PATH, python3.11+, PyYAML, git (for diff modes).
 
-## When to Call It In
+## What Each Mode Is For
 
-Call the pair in **proactively** — do not wait to be asked. The whole value is
-catching things *before* effort is sunk in.
+When the user asks for a review, pick the mode that matches what they want:
 
-| Moment | Command |
+| They want | Command |
 |---|---|
-| Chosen an approach, before building | `devpair critique --plan PLAN.md` |
-| Non-trivial code written | `devpair review --diff` |
-| Stuck on a bug >2 attempts | `devpair debug --error log --files a.py` |
-| Two designs, unsure which | `devpair alt --ask "A or B?"` |
-| Answering the pair's critique | `devpair followup --ask "..."` |
+| The approach checked before building | `devpair critique --plan PLAN.md` |
+| Written code reviewed | `devpair review --diff` |
+| Help with a stuck bug | `devpair debug --error log --files a.py` |
+| A choice between two designs | `devpair alt --ask "A or B?"` |
+| To answer the pair's last critique | `devpair followup --ask "..."` |
 
-Specifically, always call it for: security/auth boundaries, concurrency, data
-migrations, anything touching credentials or money, a design that will be hard to
-reverse, and any bug that survived two fix attempts.
+Always add `--driver PROVIDER/MODEL` (see The One Rule) and, if they named a
+reviewer, `--with PROVIDER/MODEL`.
 
-**Skip it** for: typos, formatting, renames, one-line obvious fixes, and work the
-user explicitly wants done fast without review.
+**Cost note:** each run is a second model's full context window. Give it the
+narrowest useful evidence — `--files` on the two files that matter beats
+`--diff` across forty. `--dry-run` shows who would review and how much context
+would be sent, and costs nothing.
 
 ## Commands
 
@@ -71,6 +100,9 @@ devpair debug    --cmd "pytest -x tests/test_auth.py"   # runs it, includes outp
 devpair alt      --ask "cron job or long-running daemon?"
 devpair followup --ask "Fixed 1 and 3. Disagree with 2 because ..."
 
+# user picked the pair themselves:
+devpair review   --diff --with anthropic/claude-opus-5"
+
 devpair log            # everything the pair has said this session
 devpair reset          # fresh pairing session (new feature = new session)
 devpair doctor         # check reviewer backends (probed in parallel)
@@ -82,7 +114,8 @@ RECONSIDER, on any `[BLOCKER]`, or on an unparseable verdict (fails closed).
 Default is advisory (always exit 0). `--budget N` caps total wall-clock across
 all backend attempts. Both are opt-in and safe to add to CI.
 
-Useful flags: `--focus` steers attention, `--reviewer <name>` forces a backend,
+Useful flags: `--focus` steers attention, `--with PROVIDER/MODEL` uses any model
+the user names (roster or not), `--reviewer <name>` picks a roster entry,
 `--driver PROVIDER/MODEL` declares the live session model (see The One Rule),
 `--json` for machine-readable output, `--session NAME` for parallel work,
 `--timeout N` (default 420s), `--dry-run` shows who would review and why without
@@ -119,9 +152,10 @@ whatever providers your Hermes install has.
 1. **Give it real evidence.** `--diff`/`--files` beats describing the code. The
    harness gathers context itself and passes it with `-t ""` (no tools), so the
    reviewer is read-only by construction — it physically cannot edit your code.
-2. **Always `followup` after acting on a review.** This is what makes it a pair
-   rather than a one-shot linter. It remembers what it said, notices what you
-   silently dropped, and concedes when you out-argue it.
+2. **`followup` is how a review becomes a conversation** — it remembers what it
+   said, notices what you silently dropped, and concedes when out-argued. But it
+   is another paid call: run it when the user wants the loop closed, or offer it
+   ("want me to put these fixes back to the pair?"), not automatically.
 3. **Disagreeing is legitimate.** Push back with reasoning. A pair you always
    obey is just a slow linter. But answer every point — it will notice silence.
 4. **Report its verdict to the user honestly**, including when it says STOP or
@@ -168,7 +202,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 - **Secrets are redacted before send.** Everything gathered passes through
   `redact_secrets()` at one chokepoint: vendor tokens (`sk-`, `ghp_`, `AKIA`,
   `xox`, `AIza`, `ya29`), JWTs, private-key blocks, URL passwords, secret-looking
-  `KEY=value` assignments and `Authorization:` headers become `[REDACTED:kind]`.
+  `KEY=value` assignments and `Authorization:*** headers become `[REDACTED:kind]`.
   A stderr note reports the count. This is defence in depth, not a guarantee —
   if the repo is full of live credentials, check the evidence before sending.
 - **Independence fails closed.** If the driver's family can't be identified from
@@ -204,3 +238,5 @@ maths. No network required. Run after any change.
 State at runtime lives under `~/.hermes/devpair/`: `sessions/*.json` (full
 pairing transcripts), `current_session` (pointer), and optional `config.json`
 (`{"order": ["claude","kimi","local"]}`) to reorder reviewer preference.
+
+

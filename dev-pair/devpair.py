@@ -233,13 +233,45 @@ def _family_of(model: str) -> str:
     return "unknown"
 
 
-def reviewer_candidates(explicit: str | None, driver_spec: str | None = None) -> list[dict]:
+def reviewer_candidates(explicit: str | None, driver_spec: str | None = None,
+                        ad_hoc: str | None = None) -> list[dict]:
     """Full ordered candidate list. Used for BOTH the initial pick and retries,
     so a failing first choice always falls through to every other independent
     reviewer, not just the ones named in config order."""
     driver = driver_identity(driver_spec)
     cfg = _load_cfg()
     order = cfg.get("order") or DEFAULT_ORDER
+
+    if ad_hoc:
+        # The user named a model directly: `--with anthropic/claude-opus-5`.
+        # No roster entry needed — this is the "use THIS as my pair" path.
+        if "/" in ad_hoc:
+            provider, model = ad_hoc.split("/", 1)
+        else:
+            provider, model = "", ad_hoc
+        if not model:
+            sys.exit("devpair: --with needs a model, e.g. --with anthropic/claude-sonnet-4.6")
+        if not provider:
+            # Try to find the provider from the roster; a bare model name is
+            # ambiguous otherwise and `hermes -z` needs both.
+            for r in REVIEWERS.values():
+                if r["model"] == model:
+                    provider = r["provider"]
+                    break
+        if not provider:
+            sys.exit(
+                f"devpair: --with '{ad_hoc}' has no provider and '{model}' is not in "
+                "your roster.\n  Use PROVIDER/MODEL, e.g. --with anthropic/claude-sonnet-4.6"
+            )
+        family = _family_of(model) or _family_of_provider(provider)
+        if family == "unknown":
+            family = _family_of_provider(provider)
+        cand = {
+            "key": "adhoc", "model": model, "provider": provider,
+            "family": family, "label": f"{provider}/{model}",
+            "same_family_as_driver": family != "unknown" and family == driver["family"],
+        }
+        return [cand]
 
     if explicit:
         if explicit not in REVIEWERS:
@@ -291,9 +323,10 @@ def reviewer_candidates(explicit: str | None, driver_spec: str | None = None) ->
     return out
 
 
-def pick_reviewer(explicit: str | None, driver_spec: str | None = None) -> dict:
+def pick_reviewer(explicit: str | None, driver_spec: str | None = None,
+                  ad_hoc: str | None = None) -> dict:
     """Choose a reviewer that is NOT the same family as the driver."""
-    return reviewer_candidates(explicit, driver_spec)[0]
+    return reviewer_candidates(explicit, driver_spec, ad_hoc)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -900,7 +933,7 @@ def cmd_pair(args) -> int:
     for n in notes:
         print(f"[devpair] note: {n}", file=sys.stderr)
 
-    order = reviewer_candidates(args.reviewer, args.driver)
+    order = reviewer_candidates(args.reviewer, args.driver, getattr(args, 'with_model', None))
     reviewer = order[0]
     driver = driver_identity(args.driver)
 
@@ -1170,7 +1203,11 @@ def main() -> int:
         p.add_argument("--plan", "-p", help="plan file path, or inline text")
         p.add_argument("--error", "-e", help="error/failure log path, or inline text")
         p.add_argument("--cmd", "-c", help="run this shell command and include its output")
-        p.add_argument("--reviewer", "-r", choices=list(REVIEWERS), help="force a specific reviewer")
+        p.add_argument("--reviewer", "-r", choices=list(REVIEWERS), help="force a reviewer from your roster")
+        p.add_argument("--with", dest="with_model", metavar="PROVIDER/MODEL",
+                       help="use THIS model as the pair, roster or not "
+                            "(e.g. --with anthropic/claude-opus-5). Same-family "
+                            "is warned about, not blocked — it is your call.")
         p.add_argument("--driver", metavar="[PROVIDER/]MODEL",
                        help="the model ACTUALLY doing the work (default: config.yaml model.default — "
                             "pass the live session model or the same-family guard protects the wrong model)")
