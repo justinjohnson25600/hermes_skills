@@ -693,6 +693,95 @@ def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | Non
     return "\n".join(b for b in blocks if b)
 
 
+# ---------------------------------------------------------------------------
+# Verdict parsing, gating, and claim verification. The reviewer's output is
+# prose, but two things in it are machine-actionable: the verdict line, and any
+# file:line it cites. Both are extracted here so a caller can gate on the first
+# and distrust the second.
+# ---------------------------------------------------------------------------
+BAD_VERDICTS = {"DO NOT SHIP", "STOP", "NEEDS WORK", "RECONSIDER"}
+_VERDICT_RE = re.compile(
+    r"^#+\s*(?:REMAINING\s+)?VERDICT\s*$\s*(.+?)$", re.M | re.I
+)
+
+
+def parse_verdict(response: str) -> str | None:
+    """Extract the verdict token from a review. None if absent/unparseable."""
+    m = _VERDICT_RE.search(response or "")
+    if not m:
+        return None
+    line = m.group(1).strip().strip("*_` ").upper()
+    # Longest-first so "DO NOT SHIP" wins over "SHIP", and
+    # "PROCEED WITH CHANGES" over "PROCEED".
+    known = ["DO NOT SHIP", "SHIP AFTER FIXES", "PROCEED WITH CHANGES",
+             "NEEDS WORK", "RECONSIDER", "PROCEED", "SHIP", "STOP"]
+    for tok in sorted(known, key=len, reverse=True):
+        if line.startswith(tok):
+            return tok
+    return None
+
+
+def count_blockers(response: str) -> int:
+    return len(re.findall(r"\[BLOCKER\]", response or "", re.I))
+
+
+def gate_failed(response: str) -> tuple[bool, str]:
+    """Should a --gate run exit non-zero? Returns (failed, reason).
+
+    Fails closed on an unparseable verdict: a gate that cannot read the answer
+    must not report success.
+    """
+    verdict = parse_verdict(response)
+    blockers = count_blockers(response)
+    if verdict is None:
+        return True, "no parseable VERDICT line in the review"
+    if verdict in BAD_VERDICTS:
+        return True, f"verdict: {verdict}"
+    if blockers:
+        return True, f"verdict {verdict} but {blockers} [BLOCKER] finding(s) present"
+    return False, f"verdict: {verdict}"
+
+
+def verify_claims(response: str, cwd: str | None = None) -> list[str]:
+    """Check every `path:line` the reviewer cited.
+
+    It reasons from pasted text and cannot open files, so its anchors are
+    claims, not facts. Returns human-readable problems (missing file, line past
+    EOF). Files outside the working tree are ignored rather than guessed at.
+    """
+    root = Path(cwd or os.getcwd())
+    problems: list[str] = []
+    seen: set[tuple[str, int]] = set()
+    for raw, lineno in re.findall(r"\b([\w./\-]+\.[A-Za-z]\w{0,9}):(\d+)\b", response or ""):
+        try:
+            n = int(lineno)
+        except ValueError:
+            continue
+        if (raw, n) in seen:
+            continue
+        seen.add((raw, n))
+        cand = (root / raw) if not os.path.isabs(raw) else Path(raw)
+        if not cand.exists():
+            # Try a basename match anywhere shallow in the tree before crying wolf.
+            matches = list(root.glob(f"**/{Path(raw).name}"))
+            if not matches:
+                problems.append(f"{raw}:{n} — no such file in this tree")
+                continue
+            cand = matches[0]
+        try:
+            total = len(cand.read_text(errors="replace").splitlines())
+        except Exception:
+            continue
+        if n > total:
+            problems.append(f"{raw}:{n} — file has only {total} lines")
+    return problems
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count (~4 chars/token). Good enough to spot a runaway prompt."""
+    return max(1, len(text or "") // 4)
+
+
 def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tuple[bool, str]:
     cmd = [
         "hermes", "-z", prompt,
@@ -773,8 +862,17 @@ def cmd_pair(args) -> int:
 
     t0 = time.time()
     ok, response, used = False, "", reviewer
-    for cand in order:
-        ok, response = run_reviewer(cand, prompt, args.timeout, args.verbose)
+    budget = args.budget if args.budget and args.budget > 0 else None
+    for i, cand in enumerate(order):
+        remaining = None
+        if budget is not None:
+            remaining = budget - (time.time() - t0)
+            if remaining <= 5:
+                print(f"[devpair] wall-clock budget ({budget}s) exhausted — "
+                      f"{len(order) - i} backend(s) not tried", file=sys.stderr)
+                break
+        this_timeout = int(min(args.timeout, remaining)) if remaining else args.timeout
+        ok, response = run_reviewer(cand, prompt, this_timeout, args.verbose)
         used = cand
         if ok:
             break
@@ -787,6 +885,13 @@ def cmd_pair(args) -> int:
         return 1
 
     elapsed = time.time() - t0
+    tokens_in = estimate_tokens(prompt)
+    tokens_out = estimate_tokens(response)
+
+    # The reviewer cites file:line from pasted text it cannot open — verify.
+    claim_problems = verify_claims(response, os.getcwd())
+
+    gate_fail, gate_reason = gate_failed(response)
 
     # A real review happened — now it is correct to pin the session pointer.
     if not args.session:
@@ -809,6 +914,11 @@ def cmd_pair(args) -> int:
         "driver": f"{driver['provider']}/{driver['model']}",
         "context_chars": len(context),
         "elapsed_s": round(elapsed, 1),
+        "tokens_in_est": tokens_in,
+        "tokens_out_est": tokens_out,
+        "verdict": parse_verdict(response),
+        "blockers": count_blockers(response),
+        "unverified_claims": claim_problems,
         "response": response,
     })
     sess["project"] = os.getcwd()
@@ -823,6 +933,13 @@ def cmd_pair(args) -> int:
             "session": spath.stem,
             "turn": len(sess["turns"]),
             "elapsed_s": round(elapsed, 1),
+            "tokens_in_est": tokens_in,
+            "tokens_out_est": tokens_out,
+            "verdict": parse_verdict(response),
+            "blockers": count_blockers(response),
+            "unverified_claims": claim_problems,
+            "gate_failed": gate_fail,
+            "gate_reason": gate_reason,
             "response": response,
         }, indent=2))
     else:
@@ -830,11 +947,22 @@ def cmd_pair(args) -> int:
         print(f"\n{bar}")
         print(f"  DEV PAIR · {mode.upper()} · reviewed by {used['label']}")
         print(f"  driver: {driver['model']}   session: {spath.stem} (turn {len(sess['turns'])})   {elapsed:.0f}s")
+        print(f"  ~{tokens_in:,} tokens in / ~{tokens_out:,} out")
         print(bar + "\n")
         print(response)
         print(f"\n{bar}")
+        if claim_problems:
+            print("  UNVERIFIED CLAIMS — the reviewer cited anchors that do not check out:")
+            for c in claim_problems[:8]:
+                print(f"    · {c}")
+            print("  Treat those findings with extra scepticism.")
+            print(bar)
         print(f"  reply with: devpair followup --ask \"...\"")
         print(bar)
+
+    if args.gate and gate_fail:
+        print(f"\n[devpair] GATE FAILED — {gate_reason}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -873,12 +1001,22 @@ def cmd_doctor(args) -> int:
     print("-" * 78)
     rc = 0
     any_ok = False
-    for key, r in REVIEWERS.items():
-        # The local qwen3.8-9b thinks before it answers — even a trivial probe
-        # burns a long reasoning trace (~2min at ~278 tok/s). Give it room or
-        # doctor reports a working-but-slow backend as FAIL.
+
+    def _probe(item):
+        key, r = item
+        # Small local reasoning models emit a long trace even for a trivial
+        # probe (~2min), so they get a longer leash than hosted backends.
         probe_timeout = 300 if r["provider"].startswith("lmstudio") else 90
         ok, out = run_reviewer(r, "Reply with exactly: OK", probe_timeout, False)
+        return key, r, ok, out
+
+    # Probed in parallel: serially this is 4 x up-to-300s of dead waiting.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=max(1, len(REVIEWERS))) as pool:
+        results = list(pool.map(_probe, list(REVIEWERS.items())))
+
+    for key, r, ok, out in results:
         same = " (SAME FAMILY AS DRIVER — not independent)" if r["family"] == driver["family"] else ""
         status = "OK" if ok and "OK" in out.upper()[:40] else f"FAIL: {out[:60]}"
         if ok:
@@ -888,6 +1026,31 @@ def cmd_doctor(args) -> int:
         print("\nNo reviewer backend is reachable — devpair cannot run.")
         rc = 1
     return rc
+
+
+def cmd_prune(args) -> int:
+    """Housekeeping: sessions accumulate forever otherwise."""
+    if not SESSIONS.is_dir():
+        print("devpair: no sessions to prune.")
+        return 0
+    cutoff = time.time() - (args.days * 86400)
+    current = CURRENT.read_text().strip() if CURRENT.is_file() else ""
+    files = sorted(SESSIONS.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    doomed = [p for p in files if p.stat().st_mtime < cutoff and p.stem != current]
+    if not doomed:
+        print(f"devpair: nothing older than {args.days}d "
+              f"({len(files)} session(s) kept).")
+        return 0
+    for p in doomed:
+        if args.dry_run:
+            print(f"would delete {p.stem}")
+        else:
+            p.unlink()
+            print(f"deleted {p.stem}")
+    verb = "would free" if args.dry_run else "freed"
+    print(f"devpair: {verb} {len(doomed)} session(s); "
+          f"{len(files) - len(doomed)} kept (active session never pruned).")
+    return 0
 
 
 def main() -> int:
@@ -935,7 +1098,15 @@ def main() -> int:
                        help="the model ACTUALLY doing the work (default: config.yaml model.default — "
                             "pass the live session model or the same-family guard protects the wrong model)")
         p.add_argument("--session", "-s", help="named pairing session")
-        p.add_argument("--timeout", type=int, default=420, help="seconds (default 420)")
+        p.add_argument("--timeout", type=int, default=420, help="per-backend seconds (default 420)")
+        p.add_argument("--budget", type=int, default=0,
+                       help="total wall-clock seconds across ALL backend attempts "
+                            "(default 0 = unlimited; use for CI so a dead chain "
+                            "cannot burn timeout x candidates)")
+        p.add_argument("--gate", action="store_true",
+                       help="exit 2 if the verdict is DO NOT SHIP/NEEDS WORK/STOP/RECONSIDER, "
+                            "if any [BLOCKER] is found, or if the verdict cannot be parsed "
+                            "(fails closed). Default: advisory, always exit 0.")
         p.add_argument("--json", action="store_true", help="machine-readable output")
         p.add_argument("--dry-run", action="store_true", help="show who would review and why, without calling them")
         p.add_argument("--verbose", "-v", action="store_true")
@@ -952,6 +1123,12 @@ def main() -> int:
     pd.set_defaults(func=cmd_doctor)
     pd.add_argument("--driver", metavar="[PROVIDER/]MODEL",
                     help="the live session model, for an accurate same-family column")
+
+    pp = sub.add_parser("prune", help="delete old pairing sessions")
+    pp.set_defaults(func=cmd_prune)
+    pp.add_argument("--days", type=int, default=30,
+                    help="delete sessions older than N days (default 30)")
+    pp.add_argument("--dry-run", action="store_true", help="show what would go, delete nothing")
 
     args = ap.parse_args()
     return args.func(args)

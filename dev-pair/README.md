@@ -165,8 +165,53 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 | `--reviewer NAME` | Force a specific reviewer (deliberate same-family override, warned) |
 | `--session NAME` | Named session for parallel workstreams |
 | `--timeout N` | Per-backend timeout, default 420s (use 900 for small local models) |
-| `--json` | Machine-readable output |
+| `--budget N` | Total wall-clock across ALL backends; stops a dead chain burning `timeout × candidates` |
+| `--gate` | Exit non-zero on a bad verdict — see below |
+| `--json` | Machine-readable output (verdict, blockers, tokens, unverified claims) |
 | `--dry-run` | Show who would review and why; no call, no state written |
+
+### Gating (opt-in)
+
+By default devpair is **advisory** — it always exits 0 and lets a human decide.
+`--gate` makes the verdict machine-actionable:
+
+```bash
+devpair review --diff --driver anthropic/claude-sonnet-4.6 --gate --budget 300
+echo $?     # 0 = pass, 2 = gate failed, 1 = no backend answered
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | Verdict was SHIP / SHIP AFTER FIXES / PROCEED / PROCEED WITH CHANGES, no blockers |
+| `1` | No reviewer backend answered (infrastructure failure) |
+| `2` | Gate failed: verdict was DO NOT SHIP / NEEDS WORK / STOP / RECONSIDER, **or** a `[BLOCKER]` was found under an otherwise-passing verdict, **or** the verdict could not be parsed |
+
+That last case is deliberate: a gate that cannot read the answer must not report
+success. Recommended shape for CI — gate on the mechanical tier (tests, lint,
+"the reviewer ran at all"), keep the LLM's judgement advisory until you have
+measured its precision on your own codebase.
+
+### Verifying the reviewer's claims
+
+The reviewer cites `file:line` from text it was handed — it cannot open your
+files, so those anchors are claims. devpair checks every one against the real
+tree and prints anything that doesn't hold up:
+
+```
+  UNVERIFIED CLAIMS — the reviewer cited anchors that do not check out:
+    · router.py:412 — file has only 380 lines
+    · imaginary.py:5 — no such file in this tree
+  Treat those findings with extra scepticism.
+```
+
+### Housekeeping
+
+```bash
+devpair prune --days 30 --dry-run    # see what would go
+devpair prune --days 30              # delete sessions older than 30 days
+```
+
+The active session is never pruned, regardless of age.
 
 ## Safety model
 
@@ -194,7 +239,7 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 25 regression tests (84 checks), no network required
+python3.11 test_devpair.py     # 32 regression tests (125 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.

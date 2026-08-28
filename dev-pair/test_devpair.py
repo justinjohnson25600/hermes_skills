@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -481,6 +482,133 @@ def test_missing_hermes_binary_is_soft_failure():
           r.stdout[:160])
 
 
+# --- F1: gating on the verdict ------------------------------------------------
+def test_parse_verdict_and_gate():
+    print("\n[gate] verdict parsing is exact and the gate fails CLOSED")
+    cases = [
+        ("## VERDICT\nSHIP\nLooks good.", "SHIP", False),
+        ("## VERDICT\nDO NOT SHIP\nBroken.", "DO NOT SHIP", True),
+        ("## VERDICT\nSHIP AFTER FIXES\nMinor.", "SHIP AFTER FIXES", False),
+        ("## VERDICT\nNEEDS WORK", "NEEDS WORK", True),
+        ("## VERDICT\nPROCEED WITH CHANGES\nok", "PROCEED WITH CHANGES", False),
+        ("## VERDICT\nSTOP\nno", "STOP", True),
+        ("## REMAINING VERDICT\nPROCEED\nfine", "PROCEED", False),
+    ]
+    for text, expect, should_fail in cases:
+        got = devpair.parse_verdict(text)
+        check(f"parses {expect!r}", got == expect, f"got {got!r}")
+        failed, _ = devpair.gate_failed(text)
+        check(f"gate {'blocks' if should_fail else 'passes'} on {expect!r}",
+              failed is should_fail)
+    # "DO NOT SHIP" must not be read as "SHIP"
+    check("longest-match wins (not SHIP)",
+          devpair.parse_verdict("## VERDICT\nDO NOT SHIP") == "DO NOT SHIP")
+    # A BLOCKER overrides a good-looking verdict.
+    failed, reason = devpair.gate_failed(
+        "## VERDICT\nSHIP\n## DEFECTS\n[BLOCKER] a.py:1 — boom")
+    check("BLOCKER overrides a SHIP verdict", failed, reason)
+    check("reason names the blocker count", "BLOCKER" in reason, reason)
+    # Unparseable output must NOT silently pass a gate.
+    failed, reason = devpair.gate_failed("the model rambled and forgot the format")
+    check("unparseable verdict fails closed", failed, reason)
+    check("counts blockers case-insensitively",
+          devpair.count_blockers("[blocker] x\n[BLOCKER] y") == 2)
+
+
+@isolated
+def test_gate_exit_code_end_to_end(base):
+    print("\n[gate] --gate is opt-in; default stays advisory (exit 0)")
+    import inspect
+    src = inspect.getsource(devpair.cmd_pair)
+    check("gate returns exit 2, distinct from 1 (backend failure)",
+          "return 2" in src, "no distinct gate exit code")
+    check("gate is conditional on args.gate", "args.gate and gate_fail" in src)
+
+
+# --- F2: the reviewer's file:line claims are checked ---------------------------
+@isolated
+def test_verify_claims_catches_hallucinated_anchors(base):
+    print("\n[claims] hallucinated file:line anchors are flagged")
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "real.py").write_text("a = 1\nb = 2\nc = 3\n")
+        resp = ("[BLOCKER] real.py:2 — fine\n"
+                "[MAJOR] real.py:999 — past EOF\n"
+                "[MINOR] imaginary.py:5 — does not exist\n")
+        problems = devpair.verify_claims(resp, td)
+        joined = " | ".join(problems)
+        check("valid anchor NOT flagged", "real.py:2 " not in joined, joined)
+        check("past-EOF anchor flagged", "real.py:999" in joined, joined)
+        check("missing file flagged", "imaginary.py:5" in joined, joined)
+        check("says how many lines the file has", "only 3 lines" in joined, joined)
+        clean = devpair.verify_claims("no anchors here at all", td)
+        check("no false positives on prose", clean == [], f"got {clean}")
+
+
+# --- F3: doctor probes in parallel --------------------------------------------
+def test_doctor_probes_in_parallel():
+    print("\n[doctor] backends are probed concurrently, not serially")
+    import inspect
+    src = inspect.getsource(devpair.cmd_doctor)
+    check("uses a thread pool", "ThreadPoolExecutor" in src)
+    check("no serial for-loop over REVIEWERS.items() calling run_reviewer",
+          "for key, r in REVIEWERS.items():" not in src)
+
+
+# --- F4: total wall-clock budget ----------------------------------------------
+@isolated
+def test_budget_caps_total_walltime(base):
+    print("\n[budget] a dead backend chain cannot burn timeout x candidates")
+    import inspect
+    src = inspect.getsource(devpair.cmd_pair)
+    check("budget consulted before each attempt", "budget - (time.time() - t0)" in src)
+    check("per-attempt timeout is clamped to what remains",
+          "min(args.timeout, remaining)" in src)
+    check("reports how many backends went untried", "not tried" in src)
+
+
+# --- F5: token/cost accounting -------------------------------------------------
+@isolated
+def test_token_estimates_recorded(base):
+    print("\n[cost] each turn records an input/output token estimate")
+    check("estimator is roughly 4 chars/token",
+          900 <= devpair.estimate_tokens("x" * 4000) <= 1100,
+          f"got {devpair.estimate_tokens('x' * 4000)}")
+    check("never returns 0 for non-empty text", devpair.estimate_tokens("hi") >= 1)
+    check("empty text is still >= 1", devpair.estimate_tokens("") >= 1)
+    import inspect
+    src = inspect.getsource(devpair.cmd_pair)
+    check("stored on the session turn", '"tokens_in_est"' in src)
+    check("shown in the human footer", "tokens in /" in src)
+
+
+# --- F6: session pruning -------------------------------------------------------
+@isolated
+def test_prune_respects_age_and_active_session(base):
+    print("\n[prune] old sessions go; the active one never does")
+    devpair.SESSIONS.mkdir(parents=True, exist_ok=True)
+    old = devpair.SESSIONS / "20200101-000000.json"
+    new = devpair.SESSIONS / "20991231-000000.json"
+    active = devpair.SESSIONS / "active-one.json"
+    for p in (old, new, active):
+        p.write_text('{"turns": []}')
+    ancient = time.time() - (90 * 86400)
+    os.utime(old, (ancient, ancient))
+    os.utime(active, (ancient, ancient))   # old BUT active
+    devpair.CURRENT.write_text("active-one")
+
+    args = argparse.Namespace(days=30, dry_run=True)
+    devpair.cmd_prune(args)
+    check("dry-run deletes nothing", old.is_file())
+
+    args = argparse.Namespace(days=30, dry_run=False)
+    rc = devpair.cmd_prune(args)
+    check("prune exits 0", rc == 0)
+    check("old session deleted", not old.is_file())
+    check("recent session kept", new.is_file())
+    check("ACTIVE session never pruned even when old", active.is_file(),
+          "deleted the session the user is mid-conversation with")
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -510,6 +638,13 @@ def main():
         test_pick_reviewer_honours_driver,
         test_untracked_files_are_read_not_just_named,
         test_missing_hermes_binary_is_soft_failure,
+        test_parse_verdict_and_gate,
+        test_gate_exit_code_end_to_end,
+        test_verify_claims_catches_hallucinated_anchors,
+        test_doctor_probes_in_parallel,
+        test_budget_caps_total_walltime,
+        test_token_estimates_recorded,
+        test_prune_respects_age_and_active_session,
     ):
         t()
     print("\n" + "=" * 60)

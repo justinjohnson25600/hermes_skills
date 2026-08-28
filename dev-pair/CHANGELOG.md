@@ -39,10 +39,36 @@ itself). All four findings were reproduced with live tests before fixing.
 - `pick_reviewer()` accepts an explicit driver spec (it previously ignored
   `--driver` entirely), and `doctor` gained `--driver` so its same-family column
   reflects the live session rather than the config default.
-- Tests: 18 → 25 (84 individual checks), all passing. New: secret-leak
+
+### Also in 1.1.3 — the deferred feature set
+
+- **`--gate` makes a verdict machine-actionable.** Exits **2** (distinct from 1,
+  a backend failure) when the verdict is `DO NOT SHIP` / `NEEDS WORK` / `STOP` /
+  `RECONSIDER`, when any `[BLOCKER]` is present even under a good verdict, or
+  when the verdict cannot be parsed at all — a gate that can't read the answer
+  must not report success. Off by default: devpair stays advisory unless asked.
+- **The reviewer's `file:line` claims are now verified.** It reasons from pasted
+  text and cannot open files, so every cited anchor is checked against the real
+  tree; missing files and past-EOF line numbers are listed under
+  `UNVERIFIED CLAIMS` and stored on the session turn. The docs warned about
+  hallucinated anchors and then did nothing — now the warning is enforced.
+- **`doctor` probes backends in parallel.** Serially this was up to 4 × 300s of
+  dead waiting; now one `ThreadPoolExecutor` pass.
+- **`--budget N` caps total wall-clock across the whole fallthrough.** Without
+  it, three dead candidates at the 420s default meant a 21-minute wait before
+  learning nothing worked. Each attempt's timeout is clamped to what remains,
+  and the run reports how many backends went untried.
+- **Token accounting per turn.** Input/output estimates are shown in the footer
+  and stored on the session turn (`tokens_in_est`, `tokens_out_est`) alongside
+  the parsed verdict and blocker count — the data needed to tune reviewer order
+  for a tool whose every turn is a paid API call.
+- **`devpair prune [--days N] [--dry-run]`** for session housekeeping. The
+  active session is never deleted regardless of age.
+- Tests: 18 → 32 (125 individual checks), all passing. New: secret-leak
   end-to-end, redactor unit cases, fail-closed on unknown family, provider-based
   family inference, `pick_reviewer` driver honouring, untracked-file visibility,
-  missing-binary soft failure.
+  missing-binary soft failure, verdict parsing/gating, claim verification,
+  parallel doctor, wall-clock budget, token estimates, prune semantics.
 
 ## 1.1.2 — 2026-08-28
 

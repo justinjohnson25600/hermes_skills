@@ -73,8 +73,14 @@ devpair followup --ask "Fixed 1 and 3. Disagree with 2 because ..."
 
 devpair log            # everything the pair has said this session
 devpair reset          # fresh pairing session (new feature = new session)
-devpair doctor         # check reviewer backends
+devpair doctor         # check reviewer backends (probed in parallel)
+devpair prune --days 30   # delete old sessions (never the active one)
 ```
+
+Gating: add `--gate` to exit **2** on DO NOT SHIP / NEEDS WORK / STOP /
+RECONSIDER, on any `[BLOCKER]`, or on an unparseable verdict (fails closed).
+Default is advisory (always exit 0). `--budget N` caps total wall-clock across
+all backend attempts. Both are opt-in and safe to add to CI.
 
 Useful flags: `--focus` steers attention, `--reviewer <name>` forces a backend,
 `--driver PROVIDER/MODEL` declares the live session model (see The One Rule),
@@ -174,9 +180,16 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 - **A missing `hermes` binary is a soft failure** — it falls through to the next
   backend instead of crashing.
 
+- **The pair's `file:line` claims are auto-verified.** Anchors that name a
+  missing file or a line past EOF are listed under `UNVERIFIED CLAIMS` — treat
+  those findings with extra scepticism; the rest checked out against the tree.
+- **Each turn reports token estimates** and stores the parsed verdict, blocker
+  count and any unverified claims on the session, so `--json` gives a caller
+  everything it needs without re-parsing prose.
+
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 25 regression tests (84 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 32 regression tests (125 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
