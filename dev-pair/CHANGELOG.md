@@ -24,6 +24,19 @@ costs money in practice.
   automatically.
 - Cost guidance added: prefer `--files` over a wide `--diff`, and `--dry-run`
   shows the reviewer and context size for free.
+- **Documentation pass.** New README section *"Two ways to use it"* covering
+  invocation from a Hermes conversation (plain English — there is no slash
+  command and no `hermes devpair` subcommand), the manual-only policy, and
+  running the CLI yourself; plus *"Selecting the reviewer model"* documenting
+  the three precedence levels (`--with` > `--reviewer` > roster `order`) in both
+  chat and CLI form. `--driver` is now correctly labelled as an agent's
+  responsibility, not something a chat user types.
+- Doc consistency fixes found by audit: SKILL.md still advertised 32 tests/125
+  checks and told users to hand-edit the `REVIEWERS` dict (superseded by
+  `config.json`, which survives upgrades); the README hardcoded
+  `~/.hermes/devpair/sessions` despite 1.1.4 making the home portable; the live
+  mac-mini SKILL.md was stamped 1.1.5 while still carrying the removed
+  "call proactively" text. `.pytest_cache/` added to `.gitignore`.
 - Tests: 35 → 37 (148 checks), all passing.
 
 ## 1.1.4 — 2026-08-28

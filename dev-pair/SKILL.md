@@ -57,16 +57,21 @@ independent reviewer and **tell them which model answered** so they can redirect
 
 ## Setup
 
-1. Copy `devpair.py` somewhere stable (e.g. `~/.hermes/devpair/devpair.py`).
-2. Install the `devpair` wrapper script onto your PATH (e.g. `~/.local/bin/`)
-   and `chmod +x` it. Edit the interpreter candidate list at the top if your
-   python3.11 lives elsewhere.
-3. Edit the `REVIEWERS` dict near the top of `devpair.py` to match the provider
-   IDs and models in your own Hermes `config.yaml`. Each reviewer must be
-   reachable via `hermes -z "..." -m MODEL --provider PROVIDER -t ""`.
-4. Run `devpair doctor` to verify your backends answer.
+Install with the repo's installer — it finds this machine's Hermes home, writes
+the CLI, and generates a reviewer roster from your own configured providers:
 
-Requires: Hermes Agent CLI on PATH, python3.11+, PyYAML, git (for diff modes).
+```bash
+curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python3 - dev-pair
+devpair doctor        # confirm the backends answer
+```
+
+Manual install: copy `devpair.py` + `test_devpair.py` into
+`<hermes-home>/devpair/`, put a shim on PATH that runs it, then declare your
+reviewers in `<hermes-home>/devpair/config.json` (see *How It Picks a
+Reviewer*). Do NOT edit the `REVIEWERS` dict in the source — config.json
+overrides it and survives upgrades.
+
+Requires: Hermes CLI on PATH, Python 3.8+, PyYAML, git (for diff modes).
 
 ## What Each Mode Is For
 
@@ -223,7 +228,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 32 regression tests (125 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 37 regression tests (148 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -231,9 +236,10 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 18 regression tests
-- `devpair` — CLI wrapper (smoke-tests an interpreter chain so a broken venv
-  doesn't kill the tool; edit candidates for your machine)
+- `test_devpair.py` — 37 regression tests (148 checks)
+- `devpair` — reference CLI wrapper. The installer generates its own shim
+  (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
+  this file is only needed for a manual install.
 
 State at runtime lives under `~/.hermes/devpair/`: `sessions/*.json` (full
 pairing transcripts), `current_session` (pointer), and optional `config.json`

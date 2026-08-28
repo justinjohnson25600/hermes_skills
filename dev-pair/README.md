@@ -39,7 +39,7 @@ Three design decisions do the heavy lifting:
 
 1. **Read-only reviewer.** The reviewer is invoked as `hermes -z "<prompt>" -m <model> --provider <provider> -t ""`. The `-t ""` strips all tools, so the reviewer cannot read your disk, run commands, or edit anything. It only sees the text the harness puts in the prompt.
 2. **Same-family refusal.** The tool identifies the driver model, and refuses to pick a reviewer from the same model family — it would rather exit with an error naming why each candidate was skipped than silently let a model grade its own homework. (`--reviewer` exists as a deliberate override with a loud warning.)
-3. **Session memory.** Reviews happen in persistent sessions (`~/.hermes/devpair/sessions/*.json`). When you act on a review and call `followup`, the reviewer sees what it said before — it notices concerns you silently dropped, escalates ones you ignored, and concedes when your reasoning beat its. That's what makes it a *pair* instead of a linter.
+3. **Session memory.** Reviews happen in persistent sessions (`<hermes-home>/devpair/sessions/*.json`). When you act on a review and call `followup`, the reviewer sees what it said before — it notices concerns you silently dropped, escalates ones you ignored, and concedes when your reasoning beat its. That's what makes it a *pair* instead of a linter.
 
 ## Installation
 
@@ -98,27 +98,109 @@ python3 <hermes-home>/devpair/test_devpair.py    # 137 checks, no network
 
 devpair finds your Hermes home in this order: `HERMES_HOME` → `%LOCALAPPDATA%\hermes` (Windows) → `~/.hermes` → any dotted directory that looks like a Hermes home. Sessions live at `<hermes-home>/devpair/sessions/`.
 
+## Two ways to use it
+
+dev-pair is both a **skill** (your Hermes agent reads it and runs the CLI for
+you) and a **plain CLI** (you run it yourself). Same tool, two front doors.
+
+### 1. From a Hermes conversation — just ask
+
+There is no slash command and no `hermes devpair` subcommand. Skills are
+instructions the agent loads, not commands you type. So you speak normally:
+
+```
+review that with dev-pair
+get a second opinion on this before I commit
+dev-pair this bug, I'm stuck
+```
+
+The agent works out the mode, fills in the live driver model, and runs the CLI.
+You never pass `--driver` yourself — the agent knows which model it is running
+on, and that flag exists so it cannot get that wrong.
+
+**Naming the reviewer in chat.** Say which model you want and the agent passes
+it through:
+
+```
+review that with dev-pair using opus
+have kimi look at this
+get glm to critique the plan
+```
+
+| You say | The agent runs |
+|---|---|
+| "second opinion on this" | `devpair review --diff --driver <live>` |
+| "review with opus" | `devpair review --diff --driver <live> --with anthropic/claude-opus-5` |
+| "have kimi review it" | `devpair review --diff --driver <live> --with kimi-coding/kimi-k3` |
+| "check this plan first" | `devpair critique --plan ... --driver <live>` |
+| "dev-pair this bug" | `devpair debug --error ... --files ... --driver <live>` |
+| "tell the pair I fixed 1 and 3" | `devpair followup --ask "..." --driver <live>` |
+| "which reviewers work?" | `devpair doctor --driver <live>` |
+
+If you don't name a model, the tool picks the first reviewer that is a
+different family from the driver and **tells you which one answered**, so you
+can redirect on the next turn.
+
+### 2. Manual invocation only — it never fires by itself
+
+**The agent will not run dev-pair unless you ask.** Every review spends a second
+model's tokens on top of the agent's own, so the skill forbids self-initiated
+runs: at most the agent may *offer* once ("want me to run this past the dev
+pair?") and then wait. Nothing happens until you say yes.
+
+This is deliberate. An always-on reviewer doubles the bill on renames and typo
+fixes, and a review nobody asked for is a review nobody reads.
+
+### 3. From your own terminal
+
+```bash
+devpair review --diff --with anthropic/claude-opus-5
+```
+
+Useful when you are not in a Hermes conversation at all, or in CI with
+`--gate`. Here you *should* pass `--driver` if the code was written by a model,
+so the same-family guard has something true to work with.
+
+## Selecting the reviewer model
+
+Three levels, most specific first:
+
+| How | Where | Effect |
+|---|---|---|
+| `--with PROVIDER/MODEL` | CLI, or "use opus" in chat | Uses exactly that model, roster or not. Overrides everything below |
+| `--reviewer NAME` | CLI, or "use kimi" in chat | Picks that entry from your roster |
+| roster `order` | `config.json` | Default preference when you say nothing |
+
+```bash
+devpair review --diff --with anthropic/claude-opus-5   # any reachable model
+devpair review --diff --reviewer kimi                  # a roster entry
+devpair review --diff                                  # first independent one
+```
+
+`--with` accepts any `PROVIDER/MODEL` your Hermes install can reach. If the
+model you name shares the driver's family (Claude reviewing Claude) it prints a
+warning and **proceeds anyway** — your explicit instruction outranks the guard.
+A bare model name resolves its provider from the roster when it can, and tells
+you the right form when it cannot.
+
+To change the *default* order instead of naming a model each time, edit
+`order` in `<hermes-home>/devpair/config.json`.
+
 ## Usage
 
-### The one rule
+### The one rule (for agents, not for you)
 
-**Always tell it what model is actually doing the work:**
+**Whoever calls the CLI must declare the model doing the work:**
 
 ```bash
 devpair review --diff --driver kimi-coding/kimi-k3
 ```
 
-The config-file default is a guess; if your session runs a different model than the config default, the same-family guard will protect the wrong model unless you pass `--driver`. Any Hermes agent calling this tool knows its own model and must pass it.
-
-### Choosing your reviewer
-
-```bash
-devpair review --diff --with anthropic/claude-opus-5   # use exactly this model
-devpair review --diff --reviewer kimi                  # a roster entry by name
-devpair review --diff                                  # let it pick an independent one
-```
-
-`--with` accepts any `PROVIDER/MODEL` your Hermes install can reach, whether or not it is in your roster, and overrides roster ordering. If the model shares the driver's family it warns and proceeds — your explicit instruction wins.
+The config-file default is only a guess — if the session is running a model
+override, the same-family guard protects the wrong model unless `--driver` is
+passed. A Hermes agent knows its own model and the skill requires it to pass
+it, so **in chat you never type this**. It matters only when you drive the CLI
+by hand.
 
 ### The five modes
 
@@ -282,4 +364,6 @@ Current: **1.1.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) 
 ## License
 
 MIT — see [../LICENSE](../LICENSE).
+
+
 
