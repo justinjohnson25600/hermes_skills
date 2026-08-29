@@ -2,17 +2,17 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
-## 1.2.0 — 2026-08-29
+## 1.1.10 — 2026-08-29
 
 New `verify` mode, so a *verification* pass can be routed to a different model —
-the same independence argument as code review, applied to finished deliverables.
-Minor bump rather than patch: this adds a subcommand and a second output
-vocabulary.
+the same independence argument as code review, applied to any finished work.
 
 - **`devpair verify`** runs the five-pass post-hoc critique of the `verify-results`
   skill (errors, hallucination check, gaps, ranked improvements, verdict) against
-  work that already exists. It carries its own role: the deliverable may be a
-  report or an analysis, not code, so it must not be told it is reviewing software.
+  work that already exists. Code is the primary case — a diff, a PR, a script, a
+  config, a migration, a test suite — but it is deliberately domain-agnostic and
+  works equally on a document, an analysis, or a plain answer. It carries its own
+  role so it is not told it is reviewing software when it is not.
 - **Label vocabulary is verify-results', not devpair's** — `[VERIFIED ERROR]`,
   `[UNSUPPORTED CLAIM]`, `[LIKELY ISSUE]`, `[ASSUMPTION]`, `[STYLE/CLARITY]`,
   `[SAFETY/COMPLIANCE]`. Those labels are shared with `quality-guard`, so

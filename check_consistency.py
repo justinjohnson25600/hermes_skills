@@ -118,10 +118,30 @@ def check_versions(skill: str, fix: bool) -> str | None:
 
     cl = d / "CHANGELOG.md"
     if cl.is_file():
-        m = re.search(r"^##\s*(\d+\.\d+\.\d+)", cl.read_text(encoding="utf-8"), re.M)
-        if m and m.group(1) != truth:
-            fail(f"[{skill}] newest CHANGELOG entry is {m.group(1)} but "
+        heads = re.findall(r"^##\s*(\d+\.\d+\.\d+)", cl.read_text(encoding="utf-8"), re.M)
+        if heads and heads[0] != truth:
+            fail(f"[{skill}] newest CHANGELOG entry is {heads[0]} but "
                  f"skill.json says {truth} — the release is undocumented")
+        # This repo's rule: skills increment by +0.0.1 per published change.
+        # A wrong bump is invisible to every other check here, because all five
+        # version strings agree with each other — they are just agreeing on the
+        # wrong number.
+        if len(heads) >= 2:
+            try:
+                new_v = tuple(int(x) for x in heads[0].split("."))
+                prev = tuple(int(x) for x in heads[1].split("."))
+            except ValueError:
+                new_v = prev = None
+            if new_v and prev:
+                expected = (prev[0], prev[1], prev[2] + 1)
+                if new_v != expected and new_v <= prev:
+                    fail(f"[{skill}] CHANGELOG goes {heads[1]} -> {heads[0]}, "
+                         f"which is not an increase")
+                elif new_v != expected:
+                    note(f"[{skill}] CHANGELOG jumps {heads[1]} -> {heads[0]}; "
+                         f"this repo increments +0.0.1 per change "
+                         f"(expected {'.'.join(map(str, expected))}) — "
+                         f"deliberate major/minor bumps are fine, confirm it was one")
 
     for where, (ver, path, needle) in found.items():
         if ver == truth:
