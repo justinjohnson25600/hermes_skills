@@ -1334,6 +1334,107 @@ def test_cap_refuses_when_it_cannot_lock(base):
         devpair._ledger_lock = real
 
 
+@isolated
+def test_verify_mode_speaks_verify_results_vocabulary(base):
+    print("\n[verify] the verify mode mirrors verify-results, not devpair's own shape")
+    shape = devpair.SHAPES["verify"]
+    for label in ("[VERIFIED ERROR]", "[UNSUPPORTED CLAIM]", "[LIKELY ISSUE]",
+                  "[ASSUMPTION]", "[STYLE/CLARITY]", "[SAFETY/COMPLIANCE]"):
+        check(f"shape carries {label}", label in shape)
+    for p in ("PASS 1", "PASS 2", "PASS 3", "PASS 4", "PASS 5"):
+        check(f"shape has {p}", p in shape)
+    check("shape asks for the settling checks", "CHECKS THAT WOULD SETTLE THIS" in shape)
+    # The labels are shared with quality-guard; devpair's own severity words
+    # would make the output illegible to it.
+    check("shape does NOT use devpair's [BLOCKER]", "[BLOCKER]" not in shape)
+
+    # verify critiques any deliverable, so it must NOT claim to be a code review.
+    prompt = devpair.build_prompt("verify", "check this report", "SOME WORK", {}, None)
+    check("verify uses the verifier role", "independent verifier" in prompt)
+    check("verify does not use the dev-pair software role",
+          "DEV PAIR" not in prompt, "a report review would be told it is code")
+    check("British English is required", "British English" in prompt)
+    check("the reviewer is told it cannot run commands",
+          "cannot run commands" in prompt)
+    other = devpair.build_prompt("review", "x", "y", {}, None)
+    check("other modes keep the dev-pair role", "DEV PAIR" in other)
+
+
+@isolated
+def test_verify_verdicts_parse_and_gate(base):
+    print("\n[verify] APPROVE/REVISE/DO NOT USE parse, and the bad ones fail the gate")
+    cases = {
+        "APPROVE": False,
+        "APPROVE WITH MINOR EDITS": False,
+        "REVISE BEFORE USE": True,
+        "DO NOT USE": True,
+    }
+    for verdict, should_fail in cases.items():
+        resp = f"## PASS 5 — VERDICT\n{verdict}\n\nSome reasoning."
+        got = devpair.parse_verdict(resp)
+        check(f"parses {verdict!r}", got == verdict, f"got {got!r}")
+        failed, _ = devpair.gate_failed(resp)
+        check(f"gate {'blocks' if should_fail else 'passes'} on {verdict!r}",
+              failed is should_fail)
+    # Longest-match: "APPROVE WITH MINOR EDITS" must not degrade to "APPROVE".
+    check("longest verdict wins",
+          devpair.parse_verdict("## VERDICT\nAPPROVE WITH MINOR EDITS")
+          == "APPROVE WITH MINOR EDITS")
+    # verify uses [CRITICAL] where devpair uses [BLOCKER]; the gate must count both
+    # or a review full of critical findings would pass.
+    crit = "## PASS 5 — VERDICT\nAPPROVE\n\n[CRITICAL] something will break"
+    check("[CRITICAL] is counted as a blocking finding",
+          devpair.count_blockers(crit) == 1, f"got {devpair.count_blockers(crit)}")
+    failed, reason = devpair.gate_failed(crit)
+    check("an APPROVE with a [CRITICAL] finding still fails the gate", failed is True,
+          "a critical finding passed the gate")
+    check("[BLOCKER] still counted too", devpair.count_blockers("[BLOCKER] x") == 1)
+
+
+@isolated
+def test_verify_mode_is_wired_into_the_cli(base):
+    print("\n[verify] verify is a real subcommand with the same guards as the rest")
+    src = Path(devpair.__file__).read_text()
+    check("registered in the mode loop", '"followup", "verify"' in src)
+    check("has an ASK_HINT", "verify" in devpair.ASK_HINT)
+    check("documented in the CLI epilog", "post-hoc five-pass critique" in src)
+    # It is a paid call like any other: same family guard, same ledger, same cap.
+    set_driver("glm-5.3", "zai")
+    args = argparse.Namespace(
+        mode="verify", ask="check this", focus=None, diff=False, diff_ref=None,
+        files=None, plan=None, error=None, cmd=None, reviewer=None,
+        with_model="kimi-coding/kimi-k3", driver="zai/glm-5.3", requested_by="user",
+        session=None, timeout=5, budget=0, gate=False, json=False, dry_run=True,
+        verbose=False)
+    rc = devpair.cmd_pair(args)
+    check("verify --dry-run exits 0", rc == 0)
+    check("and stays free (no ledger entry)", devpair.runs_today() == 0)
+
+
+@isolated
+def test_verdict_regex_tolerates_real_model_formatting(base):
+    print("\n[verify] the verdict parser accepts the forms models actually emit")
+    # Being strict here does NOT fail safe: an unparseable verdict fails the
+    # gate, so a well-formed review gets rejected for its punctuation.
+    cases = {
+        "## VERDICT\nSHIP AFTER FIXES": "SHIP AFTER FIXES",
+        "## PASS 5 — VERDICT\nAPPROVE": "APPROVE",
+        "PASS 5 — VERDICT\nAPPROVE": "APPROVE",          # no heading hashes
+        "## VERDICT: APPROVE": "APPROVE",                 # inline, colon
+        "VERDICT: DO NOT USE": "DO NOT USE",              # bare inline
+        "VERDICT — REVISE BEFORE USE": "REVISE BEFORE USE",
+        "## REMAINING VERDICT\nPROCEED WITH CHANGES": "PROCEED WITH CHANGES",
+    }
+    for text, want in cases.items():
+        got = devpair.parse_verdict(text)
+        check(f"parses {text.splitlines()[0][:30]!r}", got == want, f"got {got!r}")
+    # ...but prose that merely mentions the word must NOT match.
+    check("prose mentioning 'verdict' is not a verdict",
+          devpair.parse_verdict("I gave my verdict earlier.\nIt was fine.") is None,
+          "a false positive would silently mis-gate")
+    check("no verdict at all -> None", devpair.parse_verdict("no verdict here") is None)
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -1396,6 +1497,10 @@ def main():
         test_cap_holds_across_real_processes,
         test_unreadable_ledger_is_not_treated_as_zero,
         test_cap_refuses_when_it_cannot_lock,
+        test_verify_mode_speaks_verify_results_vocabulary,
+        test_verify_verdicts_parse_and_gate,
+        test_verify_mode_is_wired_into_the_cli,
+        test_verdict_regex_tolerates_real_model_formatting,
     ):
         t()
     print("\n" + "=" * 60)

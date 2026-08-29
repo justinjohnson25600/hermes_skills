@@ -2,6 +2,38 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.0 — 2026-08-29
+
+New `verify` mode, so a *verification* pass can be routed to a different model —
+the same independence argument as code review, applied to finished deliverables.
+Minor bump rather than patch: this adds a subcommand and a second output
+vocabulary.
+
+- **`devpair verify`** runs the five-pass post-hoc critique of the `verify-results`
+  skill (errors, hallucination check, gaps, ranked improvements, verdict) against
+  work that already exists. It carries its own role: the deliverable may be a
+  report or an analysis, not code, so it must not be told it is reviewing software.
+- **Label vocabulary is verify-results', not devpair's** — `[VERIFIED ERROR]`,
+  `[UNSUPPORTED CLAIM]`, `[LIKELY ISSUE]`, `[ASSUMPTION]`, `[STYLE/CLARITY]`,
+  `[SAFETY/COMPLIANCE]`. Those labels are shared with `quality-guard`, so
+  substituting devpair's own `[BLOCKER]` would make the output illegible to it.
+- **Gating understands the new vocabulary.** `DO NOT USE` and `REVISE BEFORE USE`
+  join the blocking verdicts, and `count_blockers()` now counts `[CRITICAL]` as
+  well as `[BLOCKER]` — otherwise a review full of critical findings passed the
+  gate.
+- **New section: CHECKS THAT WOULD SETTLE THIS.** The reviewer is toolless, so it
+  is asked to name the commands and sources that would confirm or refute its own
+  findings. This is what makes two-model verification reconcilable: you do not
+  arbitrate between opinions, you run the check.
+- **Verdict parsing made tolerant** (found by Kimi K3). It required `#` heading
+  hashes and end-of-line, so `PASS 5 — VERDICT` without hashes, or an inline
+  `VERDICT: APPROVE`, parsed as None. That does not fail safe — unparseable fails
+  the gate, so well-formed reviews were being rejected on punctuation. Now accepts
+  both, while still rejecting prose that merely mentions the word.
+- Tests: 58 → 62 (287 checks). Verified end-to-end against a planted deliverable:
+  `devpair verify --gate` returned `DO NOT USE`, exit 2, all five passes plus a
+  populated CHECKS section, catching a fabricated statistic and a dosing ambiguity.
+
 ## 1.1.9 — 2026-08-29
 
 - Docs/installer follow-up: both READMEs were left at 1.1.8 by the version bump,

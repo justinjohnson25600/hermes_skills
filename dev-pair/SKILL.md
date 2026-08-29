@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.9
+version: 1.2.0
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -126,6 +126,7 @@ When the user asks for a review, pick the mode that matches what they want:
 | Help with a stuck bug | `devpair debug --error log --files a.py` |
 | A choice between two designs | `devpair alt --ask "A or B?"` |
 | To answer the pair's last critique | `devpair followup --ask "..."` |
+| Finished work verified before it is used | `devpair verify --files report.md` |
 
 Always add `--driver PROVIDER/MODEL` (see The One Rule) and, because the user
 asked for this run, `--requested-by user`. If they named a reviewer, add
@@ -151,6 +152,7 @@ devpair followup --ask "Fixed 1 and 3. Disagree with 2 because ..."
 # user picked the pair themselves:
 devpair review   --diff --with anthropic/claude-opus-5
 
+devpair verify   --files report.md   # five-pass post-hoc critique (verify-results)
 devpair audit          # who ran the pair, when, and who asked (free)
 devpair log            # everything the pair has said this session
 devpair reset          # fresh pairing session (new feature = new session)
@@ -218,6 +220,10 @@ whatever providers your Hermes install has.
 
 - critique/alt/followup → `PROCEED` / `PROCEED WITH CHANGES` / `RECONSIDER` / `STOP`
 - review → `SHIP` / `SHIP AFTER FIXES` / `NEEDS WORK` / `DO NOT SHIP`
+- verify → `APPROVE` / `APPROVE WITH MINOR EDITS` / `REVISE BEFORE USE` / `DO NOT USE`
+  (five passes, `[VERIFIED ERROR]`/`[UNSUPPORTED CLAIM]`/`[ASSUMPTION]` labels shared
+  with the verify-results and quality-guard skills, plus a CHECKS THAT WOULD SETTLE
+  THIS section naming the evidence it could not gather itself)
 
 Findings are ranked `[BLOCKER|MAJOR|MINOR]` with `file:line`. "None material" is
 a valid answer — the pair is instructed not to manufacture problems to look useful.
@@ -280,7 +286,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 58 regression tests (243 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 62 regression tests (287 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -288,7 +294,7 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 58 regression tests (243 checks)
+- `test_devpair.py` — 62 regression tests (287 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

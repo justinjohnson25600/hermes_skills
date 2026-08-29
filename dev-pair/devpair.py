@@ -1072,7 +1072,92 @@ matters more than looking right.
 
 ## REMAINING VERDICT
 One of: PROCEED / PROCEED WITH CHANGES / RECONSIDER / STOP, plus one sentence.""",
+
+    # Mirrors the verify-results skill's five passes and label vocabulary
+    # EXACTLY. The labels are shared with quality-guard, so a flag raised here
+    # must stay legible there — do not substitute devpair's own
+    # [BLOCKER|MAJOR|MINOR] severity words in this shape.
+    "verify": """Respond in EXACTLY this shape, using these labels where relevant:
+[VERIFIED ERROR] — contradicted by supplied material or reliable evidence
+[UNSUPPORTED CLAIM] — may be true, but no evidence is provided
+[LIKELY ISSUE] — appears problematic but needs confirmation
+[ASSUMPTION] — relies on something not stated
+[STYLE/CLARITY] — wording, flow, or presentation issue
+[SAFETY/COMPLIANCE] — risk of harm, legal, medical, financial, or reputational
+
+## PASS 1 — ERRORS & PROBLEMS
+What is factually wrong, logically flawed, technically broken, misleading, unsafe,
+non-compliant, or likely to fail in the real world. For each:
+- Severity: [CRITICAL] / [MAJOR] / [MINOR]
+- Label: one of the labels above
+- Quoted text or exact section
+- What is wrong
+- Evidence, reasoning, or source basis
+- Confidence: High / Medium / Low
+- Corrected version or recommended fix
+
+Severity guide: [CRITICAL] will break, mislead, cause harm, create serious
+legal/compliance risk, or make the work unusable. [MAJOR] should be fixed before
+use. [MINOR] acceptable but should be improved.
+
+## PASS 2 — HALLUCINATION & VERIFICATION CHECK
+Invented facts, sources, names, dates, numbers, studies, products, APIs,
+specifications or capabilities; authoritative-sounding but unevidenced claims;
+false precision; exaggerated certainty; unsupported statistics; outdated or
+time-sensitive information; missing citations or weak source grounding.
+Mark each [VERIFIED ERROR], [UNSUPPORTED CLAIM], [LIKELY ISSUE], or [ASSUMPTION].
+
+## PASS 3 — GAPS & OMISSIONS
+What a competent professional would expect to find and cannot: missing evidence,
+safety warnings, edge cases, implementation detail, stated assumptions, audience
+context, compliance checks, practical instructions, limitations, test cases, or
+failure modes. Do not list things absent because they are irrelevant.
+
+## PASS 4 — IMPROVEMENT RECOMMENDATIONS
+The top 3-5 improvements ranked by impact, highest first. For each: what to change,
+where, why it materially matters, and a concrete rewrite/example/checklist if
+applicable. Prioritise fixes preventing factual error, user harm, broken
+functionality, compliance risk, reputational damage, or serious misunderstanding.
+
+## PASS 5 — VERDICT
+One of: APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE
+Then one short paragraph covering: overall assessment; the primary risk if used
+as-is; the single highest-leverage fix; and whether further external verification
+is required.
+
+## CHECKS THAT WOULD SETTLE THIS
+List the specific commands, lookups, or sources that would confirm or refute your
+findings above — the evidence you could not gather yourself. If none are needed,
+write "None." This section is the point of running a second model: name what the
+first one should go and check.""",
 }
+
+VERIFY_ROLE = """You are an independent verifier performing a post-hoc critique of work
+that ALREADY EXISTS, running on a different model than the one that produced it.
+
+Apply the standard of a senior professional reviewing this before it goes live, is
+sent to a client, published, deployed, or relied upon. The work may be a report, a
+document, an analysis, an answer, or code — critique what is actually in front of you.
+
+Your value is that you did not write it. You have different blind spots, and you are
+not attached to any of its conclusions.
+
+RULES
+  - Do not invent missing context, and do not assume requirements that were not
+    stated unless they are essential for this type of work.
+  - Separate confirmed errors from unsupported claims, assumptions, and subjective
+    improvements. These are different things and must not be blurred.
+  - Where verification is possible, prefer the supplied source material first, then
+    official documentation, primary research, recognised standards, or authoritative
+    references.
+  - If you are uncertain, say so, and mark confidence High, Medium, or Low.
+  - Flag false precision, overclaiming, invented detail, and unsupported certainty.
+  - You cannot run commands or open files. Anything you could not check yourself is a
+    CLAIM about the work, not a finding — say which checks would settle it.
+  - Do not pad, and do not praise structure while ignoring substance. If something is
+    good, move on. "No material issues" is a valid answer when it is true.
+
+Use British English."""
 
 ASK_HINT = {
     "critique": "Critique this direction before effort is sunk into it.",
@@ -1080,11 +1165,14 @@ ASK_HINT = {
     "debug": "Help me find this bug.",
     "alt": "Challenge this approach and give me the alternatives.",
     "followup": "Here is how I responded to your review.",
+    "verify": "Verify this finished work before it is used.",
 }
 
 
 def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | None) -> str:
-    blocks = [ROLE]
+    # `verify` critiques a finished deliverable that may not be code at all, so
+    # it carries its own role. Every other mode is the software-supervision one.
+    blocks = [VERIFY_ROLE if mode == "verify" else ROLE]
     if focus:
         blocks.append(f"\n## FOCUS DIRECTIVE\nThe colleague specifically wants your attention on: {focus}\nStill report anything critical you find outside that focus.")
     blocks.append(prior_context(sess))
@@ -1110,9 +1198,16 @@ def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | Non
 # file:line it cites. Both are extracted here so a caller can gate on the first
 # and distrust the second.
 # ---------------------------------------------------------------------------
-BAD_VERDICTS = {"DO NOT SHIP", "STOP", "NEEDS WORK", "RECONSIDER"}
+BAD_VERDICTS = {"DO NOT SHIP", "STOP", "NEEDS WORK", "RECONSIDER",
+                # verify mode's vocabulary (verify-results / quality-guard)
+                "DO NOT USE", "REVISE BEFORE USE"}
 _VERDICT_RE = re.compile(
-    r"^#+\s*(?:REMAINING\s+)?VERDICT\s*$\s*(.+?)$", re.M | re.I
+    # Tolerates the forms a model actually emits: with or without heading
+    # hashes, "PASS 5 — VERDICT", and an inline "VERDICT: APPROVE". Being
+    # strict here does not fail safe — it fails LOUD, turning a well-formed
+    # review into a spurious --gate failure.
+    r"^\s*#*\s*(?:PASS\s*\d+\s*[—\-–:]\s*)?(?:REMAINING\s+)?VERDICT\s*(?:[:：—\-–]\s*|$)\s*(.+?)$",
+    re.M | re.I,
 )
 
 
@@ -1125,7 +1220,12 @@ def parse_verdict(response: str) -> str | None:
     # Longest-first so "DO NOT SHIP" wins over "SHIP", and
     # "PROCEED WITH CHANGES" over "PROCEED".
     known = ["DO NOT SHIP", "SHIP AFTER FIXES", "PROCEED WITH CHANGES",
-             "NEEDS WORK", "RECONSIDER", "PROCEED", "SHIP", "STOP"]
+             "NEEDS WORK", "RECONSIDER", "PROCEED", "SHIP", "STOP",
+             # verify mode. "APPROVE WITH MINOR EDITS" must beat "APPROVE",
+             # and "DO NOT USE" must beat nothing else — both handled by the
+             # longest-first sort below.
+             "APPROVE WITH MINOR EDITS", "REVISE BEFORE USE", "DO NOT USE",
+             "APPROVE"]
     for tok in sorted(known, key=len, reverse=True):
         if line.startswith(tok):
             return tok
@@ -1133,7 +1233,13 @@ def parse_verdict(response: str) -> str | None:
 
 
 def count_blockers(response: str) -> int:
-    return len(re.findall(r"\[BLOCKER\]", response or "", re.I))
+    """Highest-severity findings, in EITHER vocabulary.
+
+    devpair's own modes emit [BLOCKER]; `verify` mirrors verify-results and
+    emits [CRITICAL]. Counting only one would let --gate pass a review full of
+    critical findings.
+    """
+    return len(re.findall(r"\[(?:BLOCKER|CRITICAL)\]", response or "", re.I))
 
 
 def gate_failed(response: str) -> tuple[bool, str]:
@@ -1552,6 +1658,7 @@ def main() -> int:
               debug      help find a bug you're stuck on
               alt        challenge the approach, get real alternatives
               followup   respond to the pair's earlier review
+              verify     post-hoc five-pass critique of finished work (verify-results)
 
             examples:
               devpair critique --plan PLAN.md
@@ -1565,7 +1672,7 @@ def main() -> int:
     )
     sub = ap.add_subparsers(dest="subcmd", required=True)
 
-    for mode in ("critique", "review", "debug", "alt", "followup"):
+    for mode in ("critique", "review", "debug", "alt", "followup", "verify"):
         p = sub.add_parser(mode, help=ASK_HINT[mode])
         # NOTE: the subparser dest must NOT be "cmd" — it would collide with
         # the --cmd/-c shell-command option below, and set_defaults(cmd=...)
