@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.5
+version: 1.1.6
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux]
@@ -21,11 +21,12 @@ Every devpair run spends a second model's tokens on top of your own. On small
 or routine work that is pure waste, and the decision to spend it belongs to the
 user, not to you. Load this skill for the how; wait to be asked for the when.
 
-> **Honest limitation:** this is a behavioural instruction, not a technical
-> guarantee. The CLI cannot tell a user-approved call from an agent-initiated
-> one — nothing in `devpair.py` enforces it. If you need a hard guarantee, gate
-> the command at your tool-approval layer, where authorisation is observable.
-> Treat what follows as policy that a well-behaved agent follows, not a lock.
+> **Honest limitation:** the instruction above is behavioural. What backs it is
+> in the tool: every paid run is written to an append-only ledger before the
+> call (`devpair audit`), and `daily_cap` in `config.json` is a hard refusal the
+> process obeys no matter what an agent believes it was told. Attestation
+> (`--requested-by`) is a record, not a lock — a lying caller can fill it in.
+> The cap is the part that actually bites; the ledger is how you catch the rest.
 
 **Run it only when the user explicitly asks**, in words like:
 "get a second opinion", "run it past the dev pair", "devpair this",
@@ -43,6 +44,31 @@ bugs, and asks the questions that expose gaps.
 
 It does **not** write the implementation and does **not** do the work twice.
 It is supervision, not duplication.
+
+## Accountability — the part that is not prose
+
+Three mechanisms, in descending order of how much they can be trusted:
+
+| Mechanism | What it does | Can an agent evade it? |
+|---|---|---|
+| `daily_cap` in `config.json` | Hard ceiling on paid runs per day; the process refuses | **No** |
+| Invocation ledger | Every paid run appended before the call, with who asked | No (but it only records) |
+| `--requested-by WHO` | States who asked for this run | Yes — it is an attestation |
+
+```bash
+devpair audit                 # who ran the pair, when, and who asked
+devpair audit --days 1        # just today
+devpair audit --json          # machine-readable
+```
+
+`devpair audit` flags runs that named nobody as the requester — those are
+exactly where an agent self-initiating would show up. Set a ceiling with
+`{"daily_cap": 10}` in `<hermes-home>/devpair/config.json`; add
+`{"require_attestation": true}` to make `--requested-by` mandatory.
+
+**When you call devpair on the user's behalf, pass `--requested-by user`.** Do
+not pass it otherwise — an attestation you filled in yourself is worse than
+none, because it launders an unasked-for run as an authorised one.
 
 ## Choosing the reviewer — the user decides
 
@@ -91,8 +117,9 @@ When the user asks for a review, pick the mode that matches what they want:
 | A choice between two designs | `devpair alt --ask "A or B?"` |
 | To answer the pair's last critique | `devpair followup --ask "..."` |
 
-Always add `--driver PROVIDER/MODEL` (see The One Rule) and, if they named a
-reviewer, `--with PROVIDER/MODEL`.
+Always add `--driver PROVIDER/MODEL` (see The One Rule) and, because the user
+asked for this run, `--requested-by user`. If they named a reviewer, add
+`--with PROVIDER/MODEL`.
 
 **Cost note:** each run is a second model's full context window. Give it the
 narrowest useful evidence — `--files` on the two files that matter beats
@@ -114,6 +141,7 @@ devpair followup --ask "Fixed 1 and 3. Disagree with 2 because ..."
 # user picked the pair themselves:
 devpair review   --diff --with anthropic/claude-opus-5
 
+devpair audit          # who ran the pair, when, and who asked (free)
 devpair log            # everything the pair has said this session
 devpair reset          # fresh pairing session (new feature = new session)
 devpair doctor         # check reviewer backends (probed in parallel)
@@ -128,6 +156,7 @@ all backend attempts. Both are opt-in and safe to add to CI.
 Useful flags: `--focus` steers attention, `--with PROVIDER/MODEL` uses any model
 the user names (roster or not), `--reviewer <name>` picks a roster entry,
 `--driver PROVIDER/MODEL` declares the live session model (see The One Rule),
+`--requested-by WHO` records who asked (see Accountability),
 `--json` for machine-readable output, `--session NAME` for parallel work,
 `--timeout N` (default 420s), `--dry-run` shows who would review and why without
 calling anyone or touching session state. `--diff-ref REF` diffs merge-base
@@ -241,7 +270,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 44 regression tests (175 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 50 regression tests (211 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -249,11 +278,14 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 44 regression tests (175 checks)
+- `test_devpair.py` — 50 regression tests (211 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
 
 State at runtime lives under `<hermes-home>/devpair/`: `sessions/*.json` (full
-pairing transcripts), `current_session` (pointer), and optional `config.json`
-(`{"order": ["claude","kimi","local"]}`) to reorder reviewer preference.
+pairing transcripts), `current_session` (pointer), `invocations.jsonl`
+(append-only run ledger, read it with `devpair audit`), and optional
+`config.json` — `order` to reorder reviewer preference, `reviewers` to declare
+your own roster, `daily_cap` for a hard ceiling on paid runs per day, and
+`require_attestation` to make `--requested-by` mandatory.

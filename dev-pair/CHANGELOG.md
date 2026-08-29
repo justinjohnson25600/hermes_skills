@@ -2,6 +2,42 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.6 — 2026-08-29
+
+Enforcement. 1.1.5 declared the skill "USER-INVOKED ONLY" and then admitted, in
+its own docs, that nothing enforced it — an agent that ignored the paragraph
+faced no obstacle. This release replaces most of that admission with mechanism.
+
+- **Invocation ledger.** Every paid run appends to `<hermes-home>/devpair/
+  invocations.jsonl` *before* the backend is called: timestamp, mode, reviewer,
+  driver, who asked, context size, cwd, pid. Written before rather than after so
+  a run that crashes mid-review is still on the record. A corrupt line is
+  skipped, never fatal — losing the audit trail must not take the tool down.
+- **`devpair audit`** reads it back: `--days N`, `--json`. It explicitly counts
+  and flags runs that named nobody as the requester, which is exactly where an
+  agent self-initiating would show up. Free to run.
+- **`daily_cap` — the part an agent cannot argue with.** A hard ceiling on paid
+  runs per day in `config.json`. Past it the process exits without calling any
+  backend, regardless of what the caller believes it was authorised to do.
+  Measured at 0.08s to refuse, versus a full review's tokens. `0` (default) is
+  unlimited; a malformed value falls back to unlimited rather than bricking.
+- **`--requested-by WHO`** (env: `DEVPAIR_REQUESTED_BY`) records who asked.
+  Optional by default and recorded as `unattributed` when absent;
+  `require_attestation: true` makes it mandatory. Documented honestly as an
+  attestation a lying caller can forge — a record, not a lock. The cap is the
+  lock.
+- `--dry-run` stays genuinely free: it is gated before the authorize() call, so
+  it never writes a ledger entry or consumes cap. It now also reports cap usage,
+  making it a real preflight.
+- Docs: SKILL.md and README.md gain an *Accountability* section stating plainly
+  which of the three mechanisms an agent can evade and which it cannot. The
+  README's "Two ways to use it" is renamed *Using it* — it had grown to four
+  subsections; numbering corrected.
+- Tests: 44 → 50 (211 checks). The new ones pin that the cap refuses *before*
+  `run_reviewer`, that a refused run burns no ledger slot, that `--dry-run`
+  spends nothing, and that the test harness redirects the ledger so running the
+  suite cannot pollute a real audit trail.
+
 ## 1.1.5 — 2026-08-28
 
 Invocation policy and reviewer choice — both driven by how the tool actually

@@ -73,6 +73,7 @@ BASE = _resolve_hermes_home() / "devpair"
 SESSIONS = BASE / "sessions"
 CONFIG = BASE / "config.json"
 CURRENT = BASE / "current_session"
+LEDGER = BASE / "invocations.jsonl"
 
 MAX_CONTEXT_CHARS = 90_000
 MAX_FILE_CHARS = 24_000
@@ -154,6 +155,108 @@ def _load_roster() -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+# ---------------------------------------------------------------------------
+# Invocation control. v1.1.5 said "USER-INVOKED ONLY" in SKILL.md prose, which
+# a misbehaving agent simply ignores. Prose is not a control. These are:
+#
+#   ledger  — every paid run is appended to an append-only file BEFORE the
+#             backend is called, so an unasked-for run is visible after the
+#             fact even if the agent never mentions it.
+#   cap     — a hard daily ceiling on paid runs. This is the only mechanism
+#             here that an agent cannot talk its way past: the process refuses
+#             to make the call, regardless of what it believes it was told.
+#   attest  — the caller must state WHO asked. Defeatable by a lying agent,
+#             so it is a record, not a lock; the cap is what actually bites.
+# ---------------------------------------------------------------------------
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def read_ledger(days: int = 0) -> list[dict]:
+    """Parse the invocation ledger. A corrupt line is skipped, never fatal —
+    losing the audit trail must not take the tool down with it."""
+    if not LEDGER.is_file():
+        return []
+    cutoff = time.time() - days * 86400 if days else 0
+    out = []
+    try:
+        for line in LEDGER.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if cutoff and rec.get("epoch", 0) < cutoff:
+                continue
+            out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def runs_today() -> int:
+    today = _today()
+    return sum(1 for r in read_ledger(days=2) if r.get("day") == today)
+
+
+def daily_cap() -> int:
+    """0 = unlimited. Config-driven so a machine can set its own ceiling."""
+    try:
+        return int(_load_cfg().get("daily_cap", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def log_invocation(mode: str, reviewer: dict, driver: dict, requested_by: str,
+                   context_chars: int) -> None:
+    """Append BEFORE the paid call, so a run that crashes mid-review is still
+    on the record. Best-effort: a failure to log must not block the review."""
+    rec = {
+        "at": _now(), "epoch": time.time(), "day": _today(), "mode": mode,
+        "reviewer": f"{reviewer['provider']}/{reviewer['model']}",
+        "driver": f"{driver['provider']}/{driver['model']}",
+        "requested_by": requested_by, "context_chars": context_chars,
+        "cwd": os.getcwd(), "pid": os.getpid(),
+    }
+    try:
+        LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        with open(LEDGER, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except OSError as e:
+        print(f"[devpair] note: could not write the invocation ledger ({e})",
+              file=sys.stderr)
+
+
+def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
+    """Gate a paid run. Exits non-zero rather than spending tokens."""
+    cap = daily_cap()
+    if cap:
+        used = runs_today()
+        if used >= cap:
+            sys.exit(
+                f"devpair: daily cap reached — {used}/{cap} paid runs today.\n"
+                "  This is a hard stop: no reviewer will be called.\n"
+                f"  Raise or clear it with \"daily_cap\" in {CONFIG}, or wait for tomorrow.\n"
+                "  See what spent it: devpair audit --days 1"
+            )
+
+    requested_by = (getattr(args, "requested_by", None)
+                    or os.environ.get("DEVPAIR_REQUESTED_BY") or "").strip()
+    require = bool(_load_cfg().get("require_attestation"))
+    if require and not requested_by:
+        sys.exit(
+            "devpair: this install requires --requested-by on every run.\n"
+            "  Name who asked for the review, e.g. --requested-by user\n"
+            "  (agents: this is an attestation — do not fill it in unless the\n"
+            "  user actually asked)."
+        )
+    log_invocation(args.mode, reviewer, driver, requested_by or "unattributed",
+                   context_chars)
+
 
 
 def _load_cfg() -> dict:
@@ -996,6 +1099,11 @@ def cmd_pair(args) -> int:
         print(f"mode     : {mode}")
         print(f"context  : {len(context):,} chars")
         print(f"session  : {spath.stem} (turn {len(sess.get('turns', [])) + 1})")
+        cap = daily_cap()
+        if cap:
+            used = runs_today()
+            state = "AT CAP — a real run would be refused" if used >= cap else "ok"
+            print(f"cap      : {used}/{cap} paid runs today ({state})")
         return 0
 
     if reviewer.get("unverifiable"):
@@ -1016,6 +1124,11 @@ def cmd_pair(args) -> int:
         )
 
     prompt = build_prompt(mode, args.ask or "", context, sess, args.focus)
+
+    # Gate + record the paid run. Placed AFTER --dry-run (which is free and must
+    # stay free) and BEFORE the first backend call, so nothing is spent without
+    # a ledger entry and nothing exceeds the cap.
+    authorize(args, reviewer, driver, len(context))
 
     t0 = time.time()
     ok, response, used = False, "", reviewer
@@ -1196,6 +1309,46 @@ def cmd_doctor(args) -> int:
     return rc
 
 
+def cmd_audit(args) -> int:
+    """Who has been spending your tokens, and did anyone claim you asked?
+
+    This is the accountability half of the manual-invocation policy: the skill
+    tells an agent not to self-initiate, and this shows whether it obeyed.
+    """
+    recs = read_ledger(days=args.days)
+    if not recs:
+        where = "no runs recorded" if LEDGER.is_file() else f"no ledger yet at {LEDGER}"
+        print(f"devpair: {where}"
+              + (f" in the last {args.days}d." if args.days else "."))
+        return 0
+
+    if args.json:
+        print(json.dumps({"days": args.days, "count": len(recs),
+                          "runs_today": runs_today(), "daily_cap": daily_cap(),
+                          "runs": recs}, indent=2))
+        return 0
+
+    print(f"{'when':<22} {'mode':<9} {'requested by':<14} {'reviewer':<30} ctx")
+    print("─" * 88)
+    for r in recs:
+        print(f"{r.get('at','?')[:19]:<22} {r.get('mode','?'):<9} "
+              f"{r.get('requested_by','?')[:13]:<14} {r.get('reviewer','?')[:29]:<30} "
+              f"{r.get('context_chars',0):,}")
+
+    unattributed = [r for r in recs if r.get("requested_by") in ("", "unattributed", None)]
+    cap = daily_cap()
+    print("─" * 88)
+    print(f"{len(recs)} run(s)"
+          + (f" in the last {args.days}d" if args.days else "")
+          + f"; {runs_today()} today"
+          + (f" of a {cap}/day cap" if cap else " (no daily cap set)"))
+    if unattributed:
+        print(f"\n  {len(unattributed)} run(s) named nobody as the requester.")
+        print("  Unattributed runs are the ones to check — the skill forbids an")
+        print("  agent from self-initiating, and this is where that would show.")
+    return 0
+
+
 def cmd_prune(args) -> int:
     """Housekeeping: sessions accumulate forever otherwise."""
     if not SESSIONS.is_dir():
@@ -1272,6 +1425,10 @@ def main() -> int:
         p.add_argument("--driver", metavar="[PROVIDER/]MODEL",
                        help="the model ACTUALLY doing the work (default: config.yaml model.default — "
                             "pass the live session model or the same-family guard protects the wrong model)")
+        p.add_argument("--requested-by", dest="requested_by", metavar="WHO",
+                       help="who asked for this review (e.g. 'user'). Recorded in "
+                            "the invocation ledger; agents must NOT fill this in "
+                            "unless the user actually asked. Env: DEVPAIR_REQUESTED_BY")
         p.add_argument("--session", "-s", help="named pairing session")
         p.add_argument("--timeout", type=int, default=420, help="per-backend seconds (default 420)")
         p.add_argument("--budget", type=int, default=0,
@@ -1298,6 +1455,12 @@ def main() -> int:
     pd.set_defaults(func=cmd_doctor)
     pd.add_argument("--driver", metavar="[PROVIDER/]MODEL",
                     help="the live session model, for an accurate same-family column")
+
+    pa = sub.add_parser("audit", help="who ran the pair, when, and who asked")
+    pa.set_defaults(func=cmd_audit)
+    pa.add_argument("--days", type=int, default=7,
+                    help="look back N days (default 7; 0 = all history)")
+    pa.add_argument("--json", action="store_true", help="machine-readable output")
 
     pp = sub.add_parser("prune", help="delete old pairing sessions")
     pp.set_defaults(func=cmd_prune)

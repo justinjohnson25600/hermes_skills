@@ -73,7 +73,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 175 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 211 checks, no network
 ```
 
 ### Configuration
@@ -96,12 +96,13 @@ python3 <hermes-home>/devpair/test_devpair.py    # 175 checks, no network
 
 ### Where state lives
 
-devpair finds your Hermes home in this order: `HERMES_HOME` → `%LOCALAPPDATA%\hermes` (Windows) → `~/.hermes` → any dotted directory that looks like a Hermes home. Sessions live at `<hermes-home>/devpair/sessions/`.
+devpair finds your Hermes home in this order: `HERMES_HOME` → `%LOCALAPPDATA%\hermes` (Windows) → `~/.hermes` → any dotted directory that looks like a Hermes home. Sessions live at `<hermes-home>/devpair/sessions/`, and the invocation ledger at `<hermes-home>/devpair/invocations.jsonl`.
 
-## Two ways to use it
+## Using it
 
 dev-pair is both a **skill** (your Hermes agent reads it and runs the CLI for
-you) and a **plain CLI** (you run it yourself). Same tool, two front doors.
+you) and a **plain CLI** (you run it yourself). Same tool, two front doors —
+plus the policy and accountability that govern when it is allowed to run.
 
 ### 1. From a Hermes conversation — just ask
 
@@ -151,12 +152,46 @@ pair?") and then wait. Nothing happens until you say yes.
 This is deliberate. An always-on reviewer doubles the bill on renames and typo
 fixes, and a review nobody asked for is a review nobody reads.
 
-**Caveat, stated plainly:** this is enforced by instruction, not by code. The
-CLI has no way to distinguish a user-approved call from an agent-initiated one,
-so a misbehaving agent could still run it. If you want a hard guarantee, gate
-the `devpair` command at your tool-approval layer.
+**Caveat, stated plainly:** the instruction is behavioural, but it is not the
+only thing standing there. Every paid run is written to an append-only ledger
+*before* the call, so `devpair audit` shows you exactly what ran and whether
+anyone claimed you asked; and `daily_cap` in `config.json` is a hard refusal —
+the process will not call a reviewer past it, whatever an agent believes it was
+told. A lying caller can still fill in `--requested-by`, so treat that field as
+a record rather than a lock. See [Accountability](#accountability) below.
 
-### 3. From your own terminal
+### 3. Accountability
+
+Three mechanisms back the manual-invocation policy, in descending order of how
+much you can trust them:
+
+| Mechanism | What it does | Evadable by an agent? |
+|---|---|---|
+| `daily_cap` | Hard ceiling on paid runs per day — the process refuses, no backend is called | **No** |
+| Invocation ledger | Every paid run appended before the call: when, mode, reviewer, who asked | No (records only) |
+| `--requested-by WHO` | Names who asked for this run | Yes — it is an attestation |
+
+```bash
+devpair audit              # last 7 days: when, mode, who asked, reviewer, context size
+devpair audit --days 1     # just today
+devpair audit --json       # machine-readable, includes runs_today and daily_cap
+```
+
+`audit` explicitly flags runs that named nobody as the requester — that is where
+an agent running the pair unasked would show up. It costs nothing to run.
+
+Set a ceiling in `<hermes-home>/devpair/config.json`:
+
+```json
+{ "daily_cap": 10, "require_attestation": true }
+```
+
+`daily_cap: 0` (the default) means unlimited. `require_attestation` makes
+`--requested-by` mandatory, so a run with no named requester fails instead of
+proceeding anonymously. `--dry-run` stays free under both — it never touches the
+ledger or the cap, and it now shows how much of your cap is left.
+
+### 4. From your own terminal
 
 ```bash
 devpair review --diff --with anthropic/claude-opus-5
@@ -281,6 +316,7 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 | `--focus "concurrency"` | Steer attention; critical off-focus findings still reported |
 | `--with PROVIDER/MODEL` | Use **this** model as the pair — roster or not. Your explicit choice; same-family warns but proceeds |
 | `--reviewer NAME` | Pick a reviewer from your roster |
+| `--requested-by WHO` | Record who asked for this run (see Accountability). Env: `DEVPAIR_REQUESTED_BY` |
 | `--session NAME` | Named session for parallel workstreams |
 | `--timeout N` | Per-backend timeout, default 420s (use 900 for small local models) |
 | `--budget N` | Total wall-clock across ALL backends; stops a dead chain burning `timeout × candidates` |
@@ -358,14 +394,14 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 44 regression tests (175 checks), no network required
+python3.11 test_devpair.py     # 50 regression tests (211 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.6**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

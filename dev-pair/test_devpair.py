@@ -30,15 +30,20 @@ def isolated(fn):
     def wrapper():
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
-            orig = (devpair.BASE, devpair.SESSIONS, devpair.CONFIG, devpair.CURRENT)
+            orig = (devpair.BASE, devpair.SESSIONS, devpair.CONFIG,
+                    devpair.CURRENT, devpair.LEDGER)
             devpair.BASE = base
             devpair.SESSIONS = base / "sessions"
             devpair.CONFIG = base / "config.json"
             devpair.CURRENT = base / "current_session"
+            # Without this the ledger tests would append to the REAL Hermes
+            # home and pollute the user's audit trail.
+            devpair.LEDGER = base / "invocations.jsonl"
             try:
                 fn(base)
             finally:
-                devpair.BASE, devpair.SESSIONS, devpair.CONFIG, devpair.CURRENT = orig
+                (devpair.BASE, devpair.SESSIONS, devpair.CONFIG,
+                 devpair.CURRENT, devpair.LEDGER) = orig
     return wrapper
 
 
@@ -903,6 +908,160 @@ def test_with_and_reviewer_together_refuses(base):
           devpair.reviewer_candidates("kimi", None, None)[0]["key"] == "kimi")
 
 
+# --- v1.1.6: invocation control (the enforcement the policy prose lacked) ----
+@isolated
+def test_ledger_records_every_paid_run(base):
+    print("\n[audit] every paid run lands in an append-only ledger")
+    rev = {"provider": "kimi-coding", "model": "kimi-k3"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    check("no ledger before the first run", devpair.read_ledger() == [])
+    devpair.log_invocation("review", rev, drv, "user", 1234)
+    devpair.log_invocation("critique", rev, drv, "unattributed", 99)
+    recs = devpair.read_ledger()
+    check("both runs recorded", len(recs) == 2, f"got {len(recs)}")
+    check("requester preserved", recs[0]["requested_by"] == "user", f"got {recs[0]}")
+    check("mode preserved", recs[1]["mode"] == "critique")
+    check("reviewer recorded", recs[0]["reviewer"] == "kimi-coding/kimi-k3")
+    check("context size recorded", recs[0]["context_chars"] == 1234)
+    check("today's runs counted", devpair.runs_today() == 2, f"got {devpair.runs_today()}")
+
+    # A corrupt line must not take the tool down with the audit trail.
+    with open(devpair.LEDGER, "a", encoding="utf-8") as fh:
+        fh.write("{not json at all\n\n")
+    check("corrupt ledger line is skipped, not fatal",
+          len(devpair.read_ledger()) == 2, "a bad line broke the reader")
+
+
+@isolated
+def test_daily_cap_is_a_hard_stop(base):
+    print("\n[audit] the daily cap REFUSES a run instead of spending tokens")
+    rev = {"provider": "kimi-coding", "model": "kimi-k3"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    args = argparse.Namespace(mode="review", requested_by="user")
+
+    check("no cap by default (0 = unlimited)", devpair.daily_cap() == 0)
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 2}))
+    check("cap read from config", devpair.daily_cap() == 2)
+
+    devpair.authorize(args, rev, drv, 10)
+    devpair.authorize(args, rev, drv, 10)
+    check("runs under the cap are allowed and logged", devpair.runs_today() == 2)
+
+    try:
+        devpair.authorize(args, rev, drv, 10)
+        check("exceeding the cap -> SystemExit", False, "the run was allowed")
+    except SystemExit as e:
+        check("exceeding the cap -> SystemExit", True)
+        check("refusal names the cap", "2/2" in str(e), str(e)[:120])
+        check("refusal says it is a hard stop", "hard stop" in str(e).lower())
+    check("the refused run was NOT logged", devpair.runs_today() == 2,
+          "a refused run still burned a ledger slot")
+
+    # A malformed cap must not brick the tool.
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": "not-a-number"}))
+    check("garbage cap falls back to unlimited", devpair.daily_cap() == 0)
+
+
+@isolated
+def test_attestation_is_optional_then_enforced(base):
+    print("\n[audit] --requested-by is recorded always, required only if configured")
+    rev = {"provider": "kimi-coding", "model": "kimi-k3"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+
+    # Default: no attestation demanded, but its absence is RECORDED as such.
+    devpair.authorize(argparse.Namespace(mode="review", requested_by=None), rev, drv, 5)
+    check("unattributed run still allowed by default", devpair.runs_today() == 1)
+    check("and is marked 'unattributed', not silently blank",
+          devpair.read_ledger()[0]["requested_by"] == "unattributed",
+          f"got {devpair.read_ledger()[0]['requested_by']!r}")
+
+    devpair.CONFIG.write_text(json.dumps({"require_attestation": True}))
+    try:
+        devpair.authorize(argparse.Namespace(mode="review", requested_by=None), rev, drv, 5)
+        check("required attestation missing -> SystemExit", False, "ran anyway")
+    except SystemExit as e:
+        check("required attestation missing -> SystemExit", True)
+        check("message tells the caller the flag", "--requested-by" in str(e))
+    check("the refused run was not logged", devpair.runs_today() == 1)
+
+    devpair.authorize(argparse.Namespace(mode="review", requested_by="user"), rev, drv, 5)
+    check("supplying the attestation lets it through", devpair.runs_today() == 2)
+
+    # The env var is an equally valid source (for wrappers/CI).
+    os.environ["DEVPAIR_REQUESTED_BY"] = "ci"
+    try:
+        devpair.authorize(argparse.Namespace(mode="review", requested_by=None), rev, drv, 5)
+        check("env var satisfies attestation", devpair.runs_today() == 3)
+        check("env var value is what gets recorded",
+              devpair.read_ledger()[-1]["requested_by"] == "ci")
+    finally:
+        os.environ.pop("DEVPAIR_REQUESTED_BY", None)
+
+
+@isolated
+def test_dry_run_is_free_and_never_logs(base):
+    print("\n[audit] --dry-run must stay free: no ledger entry, no cap spend")
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 1}))
+    set_driver("glm-5.3", "zai")
+    args = argparse.Namespace(
+        mode="review", ask=None, focus=None, diff=False, diff_ref=None,
+        files=None, plan=None, error=None, cmd=None, reviewer=None,
+        with_model=None, driver="zai/glm-5.3", requested_by=None, session=None,
+        timeout=5, budget=0, gate=False, json=False, dry_run=True, verbose=False)
+    rc = devpair.cmd_pair(args)
+    check("dry-run exits 0", rc == 0)
+    check("dry-run wrote NO ledger entry", devpair.runs_today() == 0,
+          "a free preflight consumed the daily cap")
+    check("so the cap is still spendable", devpair.daily_cap() == 1)
+
+
+@isolated
+def test_authorize_gates_before_the_paid_call(base):
+    print("\n[audit] the gate is wired BEFORE the backend, not after")
+    src = Path(devpair.__file__).read_text()
+    body = src[src.index("def cmd_pair("):src.index("def cmd_log(")]
+    check("cmd_pair calls authorize()", "authorize(args, reviewer, driver" in body)
+    gate_at = body.index("authorize(args, reviewer, driver")
+    call_at = body.index("run_reviewer(cand")
+    check("authorize() runs BEFORE run_reviewer()", gate_at < call_at,
+          "tokens would already be spent by the time the cap is checked")
+    dry_at = body.index("if args.dry_run:")
+    check("and AFTER the dry-run short-circuit", dry_at < gate_at,
+          "--dry-run would be gated/logged despite being free")
+
+
+@isolated
+def test_audit_command_surfaces_unattributed_runs(base):
+    print("\n[audit] `devpair audit` reports history and flags unattributed runs")
+    rev = {"provider": "kimi-coding", "model": "kimi-k3"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    rc = devpair.cmd_audit(argparse.Namespace(days=7, json=False))
+    check("empty ledger is not an error", rc == 0)
+
+    devpair.log_invocation("review", rev, drv, "user", 10)
+    devpair.log_invocation("review", rev, drv, "unattributed", 10)
+    out = json.loads(_capture(devpair.cmd_audit,
+                              argparse.Namespace(days=7, json=True)))
+    check("json reports both runs", out["count"] == 2, f"got {out}")
+    check("json exposes today's count", out["runs_today"] == 2)
+    check("json exposes the cap", "daily_cap" in out)
+    text = _capture(devpair.cmd_audit, argparse.Namespace(days=7, json=False))
+    check("human output flags the unattributed run",
+          "named nobody" in text, text[-200:])
+    check("human output names the requester of the attributed one",
+          "user" in text)
+
+
+def _capture(fn, args) -> str:
+    """Run a command function and return everything it printed."""
+    import io
+    from contextlib import redirect_stdout
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        fn(args)
+    return buf.getvalue()
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -951,6 +1110,12 @@ def main():
         test_unknown_family_is_never_called_same_family,
         test_independence_state_is_reported_to_callers,
         test_with_and_reviewer_together_refuses,
+        test_ledger_records_every_paid_run,
+        test_daily_cap_is_a_hard_stop,
+        test_attestation_is_optional_then_enforced,
+        test_dry_run_is_free_and_never_logs,
+        test_authorize_gates_before_the_paid_call,
+        test_audit_command_surfaces_unattributed_runs,
     ):
         t()
     print("\n" + "=" * 60)
