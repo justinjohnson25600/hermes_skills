@@ -73,7 +73,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 211 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 228 checks, no network
 ```
 
 ### Configuration
@@ -185,6 +185,14 @@ Set a ceiling in `<hermes-home>/devpair/config.json`:
 ```json
 { "daily_cap": 10, "require_attestation": true }
 ```
+
+Count-and-append run under one file lock, so two concurrent invocations cannot
+both pass the same cap, and a torn ledger line (from a crashed run) neither
+undercounts the quota nor destroys the record appended after it. When a cap or
+required attestation is active the path **fails closed** — an unwritable ledger
+or an unprovable count refuses the run instead of spending tokens nothing can
+account for. On a platform with no file locking the cap degrades to advisory and
+says so on stderr rather than pretending.
 
 `daily_cap: 0` (the default) means unlimited. `require_attestation` makes
 `--requested-by` mandatory, so a run with no named requester fails instead of
@@ -394,14 +402,14 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 50 regression tests (211 checks), no network required
+python3.11 test_devpair.py     # 55 regression tests (228 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.6**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.7**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

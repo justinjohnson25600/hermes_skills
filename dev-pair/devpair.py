@@ -174,13 +174,75 @@ def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def read_ledger(days: int = 0) -> list[dict]:
-    """Parse the invocation ledger. A corrupt line is skipped, never fatal —
-    losing the audit trail must not take the tool down with it."""
+class _ledger_lock:
+    """Exclusive lock around count-and-append.
+
+    Without it the cap is only advisory: two processes both read `used < cap`,
+    both append, and both call a backend — a `daily_cap: 1` machine spends
+    twice. Uses a separate lock file so the lock survives ledger truncation.
+
+    Degrades honestly: if no locking primitive exists on this platform, the
+    caller is told the cap is advisory rather than being given a false promise.
+    """
+
+    def __init__(self) -> None:
+        self.fh = None
+        self.locked = False
+
+    def __enter__(self):
+        try:
+            LEDGER.parent.mkdir(parents=True, exist_ok=True)
+            self.fh = open(str(LEDGER) + ".lock", "a+")
+        except OSError:
+            return self
+        try:
+            import fcntl  # POSIX
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+            self.locked = True
+        except ImportError:
+            try:
+                import msvcrt  # Windows
+                self.fh.seek(0)
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+                self.locked = True
+            except (ImportError, OSError):
+                pass
+        except OSError:
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.fh:
+            try:
+                if self.locked:
+                    try:
+                        import fcntl
+                        fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+                    except ImportError:
+                        import msvcrt
+                        self.fh.seek(0)
+                        msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            try:
+                self.fh.close()
+            except OSError:
+                pass
+        return False
+
+
+def _scan_ledger(days: int = 0) -> tuple[list[dict], int]:
+    """Parse the ledger, returning (records, corrupt_line_count).
+
+    The corrupt count is the honest part: a quota computed from a ledger with
+    unreadable lines is an UNDERCOUNT, and enforcement must know that rather
+    than silently under-reporting how much has been spent.
+    """
     if not LEDGER.is_file():
-        return []
+        return [], 0
     cutoff = time.time() - days * 86400 if days else 0
-    out = []
+    out: list[dict] = []
+    corrupt = 0
     try:
         for line in LEDGER.read_text(errors="replace").splitlines():
             line = line.strip()
@@ -189,18 +251,28 @@ def read_ledger(days: int = 0) -> list[dict]:
             try:
                 rec = json.loads(line)
             except Exception:
+                corrupt += 1
+                continue
+            if not isinstance(rec, dict):
+                corrupt += 1
                 continue
             if cutoff and rec.get("epoch", 0) < cutoff:
                 continue
             out.append(rec)
     except OSError:
-        return []
-    return out
+        return [], 0
+    return out, corrupt
+
+
+def read_ledger(days: int = 0) -> list[dict]:
+    """Lenient view for `devpair audit` — a corrupt line must not hide the rest
+    of the history from the human trying to read it."""
+    return _scan_ledger(days)[0]
 
 
 def runs_today() -> int:
     today = _today()
-    return sum(1 for r in read_ledger(days=2) if r.get("day") == today)
+    return sum(1 for r in _scan_ledger(days=2)[0] if r.get("day") == today)
 
 
 def daily_cap() -> int:
@@ -212,9 +284,13 @@ def daily_cap() -> int:
 
 
 def log_invocation(mode: str, reviewer: dict, driver: dict, requested_by: str,
-                   context_chars: int) -> None:
-    """Append BEFORE the paid call, so a run that crashes mid-review is still
-    on the record. Best-effort: a failure to log must not block the review."""
+                   context_chars: int) -> bool:
+    """Append one run to the ledger. Returns whether it was durably recorded.
+
+    A crashed writer can leave a line with no trailing newline; appending after
+    it would concatenate the two and destroy BOTH records. The newline guard
+    heals that instead of compounding it.
+    """
     rec = {
         "at": _now(), "epoch": time.time(), "day": _today(), "mode": mode,
         "reviewer": f"{reviewer['provider']}/{reviewer['model']}",
@@ -224,29 +300,41 @@ def log_invocation(mode: str, reviewer: dict, driver: dict, requested_by: str,
     }
     try:
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        prefix = ""
+        try:
+            if LEDGER.is_file() and LEDGER.stat().st_size:
+                with open(LEDGER, "rb") as fh:
+                    fh.seek(-1, os.SEEK_END)
+                    if fh.read(1) != b"\n":
+                        prefix = "\n"
+        except OSError:
+            pass
         with open(LEDGER, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec) + "\n")
+            fh.write(prefix + json.dumps(rec) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        return True
     except OSError as e:
         print(f"[devpair] note: could not write the invocation ledger ({e})",
               file=sys.stderr)
+        return False
 
 
 def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
-    """Gate a paid run. Exits non-zero rather than spending tokens."""
-    cap = daily_cap()
-    if cap:
-        used = runs_today()
-        if used >= cap:
-            sys.exit(
-                f"devpair: daily cap reached — {used}/{cap} paid runs today.\n"
-                "  This is a hard stop: no reviewer will be called.\n"
-                f"  Raise or clear it with \"daily_cap\" in {CONFIG}, or wait for tomorrow.\n"
-                "  See what spent it: devpair audit --days 1"
-            )
+    """Gate a paid run. Exits non-zero rather than spending tokens.
 
+    Count and append happen under one lock, so the cap cannot be raced. When a
+    cap is in force the whole path FAILS CLOSED: an unreadable or unwritable
+    ledger means the quota cannot be proven, and an unprovable limit is not a
+    limit. With no cap set the ledger stays best-effort — an audit trail should
+    never be the thing that blocks a review nobody limited.
+    """
+    cap = daily_cap()
     requested_by = (getattr(args, "requested_by", None)
                     or os.environ.get("DEVPAIR_REQUESTED_BY") or "").strip()
     require = bool(_load_cfg().get("require_attestation"))
+    enforcing = bool(cap) or require
+
     if require and not requested_by:
         sys.exit(
             "devpair: this install requires --requested-by on every run.\n"
@@ -254,15 +342,60 @@ def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
             "  (agents: this is an attestation — do not fill it in unless the\n"
             "  user actually asked)."
         )
-    log_invocation(args.mode, reviewer, driver, requested_by or "unattributed",
-                   context_chars)
+
+    with _ledger_lock() as lock:
+        if cap:
+            if not lock.locked:
+                print("[devpair] WARNING: no file lock available on this platform — "
+                      "the daily cap is advisory here and two concurrent runs "
+                      "could both pass it.", file=sys.stderr)
+            recs, corrupt = _scan_ledger(days=2)
+            if corrupt:
+                sys.exit(
+                    f"devpair: the invocation ledger has {corrupt} unreadable "
+                    f"line(s), so today's usage cannot be proven.\n"
+                    f"  A daily cap is set ({cap}/day), and an unprovable limit is "
+                    "not a limit — refusing rather than risk overspending.\n"
+                    f"  Inspect or repair {LEDGER}, then retry."
+                )
+            used = sum(1 for r in recs if r.get("day") == _today())
+            if used >= cap:
+                sys.exit(
+                    f"devpair: daily cap reached — {used}/{cap} paid runs today.\n"
+                    "  This is a hard stop: no reviewer will be called.\n"
+                    f"  Raise or clear it with \"daily_cap\" in {CONFIG}, or wait for tomorrow.\n"
+                    "  See what spent it: devpair audit --days 1"
+                )
+
+        wrote = log_invocation(args.mode, reviewer, driver,
+                               requested_by or "unattributed", context_chars)
+
+    if enforcing and not wrote:
+        # The run would proceed unrecorded, which makes the cap uncountable and
+        # a required attestation meaningless. Refuse instead of quietly
+        # downgrading the guarantee the docs advertise.
+        sys.exit(
+            f"devpair: could not record this run in {LEDGER}.\n"
+            "  This install enforces a daily cap or required attestation, both of\n"
+            "  which depend on the ledger — proceeding would spend tokens that\n"
+            "  nothing could account for. Fix the path's permissions and retry."
+        )
+
 
 
 
 def _load_cfg() -> dict:
     if CONFIG.is_file():
         try:
-            return json.loads(CONFIG.read_text())
+            cfg = json.loads(CONFIG.read_text())
+            # Valid JSON of the WRONG SHAPE (a list, a string, a number) would
+            # otherwise reach every .get() call site and crash the whole CLI —
+            # _load_roster() runs before argparse, so a stray `[]` bricked even
+            # `devpair --help`.
+            if isinstance(cfg, dict):
+                return cfg
+            print(f"devpair: ignoring {CONFIG} — expected a JSON object, got "
+                  f"{type(cfg).__name__}.", file=sys.stderr)
         except Exception:
             pass
     return {}

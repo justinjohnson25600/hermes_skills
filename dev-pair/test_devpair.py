@@ -1062,6 +1062,131 @@ def _capture(fn, args) -> str:
     return buf.getvalue()
 
 
+# --- Luna's v1.1.6 review: the cap must be hard, not advisory ---------------
+@isolated
+def test_cap_survives_concurrent_runs(base):
+    print("\n[audit] the cap holds under concurrency (check-then-append was racy)")
+    import threading
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 1}))
+    rev = {"provider": "p", "model": "m"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    gate, out = threading.Barrier(4), []
+
+    def run():
+        a = argparse.Namespace(mode="review", requested_by="user")
+        gate.wait()  # line all four up ON the quota check
+        try:
+            devpair.authorize(a, rev, drv, 10)
+            out.append("allowed")
+        except SystemExit:
+            out.append("refused")
+
+    ts = [threading.Thread(target=run) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    check("exactly one of four concurrent runs is allowed",
+          out.count("allowed") == 1, f"got {out}")
+    check("and exactly one ledger entry exists",
+          len(devpair.read_ledger()) == 1, f"got {len(devpair.read_ledger())}")
+
+
+@isolated
+def test_unwritable_ledger_fails_closed_only_when_enforcing(base):
+    print("\n[audit] an unrecordable run is refused under a cap, allowed without one")
+    rev = {"provider": "p", "model": "m"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    devpair.LEDGER = base / "blocked"
+    devpair.LEDGER.mkdir()  # a directory: every append will fail
+
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 1}))
+    try:
+        devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                          rev, drv, 10)
+        check("capped + unwritable ledger -> SystemExit", False,
+              "spent tokens nothing could account for")
+    except SystemExit as e:
+        check("capped + unwritable ledger -> SystemExit", True)
+        check("refusal explains why", "could not record" in str(e), str(e)[:120])
+
+    devpair.CONFIG.write_text(json.dumps({"require_attestation": True}))
+    try:
+        devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                          rev, drv, 10)
+        check("required attestation + unwritable ledger -> SystemExit", False)
+    except SystemExit:
+        check("required attestation + unwritable ledger -> SystemExit", True)
+
+    # But with nothing being enforced, the audit trail is best-effort: it must
+    # never be the thing that blocks a review nobody limited.
+    devpair.CONFIG.write_text(json.dumps({}))
+    try:
+        devpair.authorize(argparse.Namespace(mode="review", requested_by=None),
+                          rev, drv, 10)
+        check("uncapped run still proceeds when logging fails", True)
+    except SystemExit as e:
+        check("uncapped run still proceeds when logging fails", False,
+              f"blocked an unlimited install: {str(e)[:80]}")
+
+
+@isolated
+def test_corrupt_ledger_cannot_undercount_a_cap(base):
+    print("\n[audit] an unprovable count refuses instead of silently undercounting")
+    rev = {"provider": "p", "model": "m"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 2}))
+    devpair.log_invocation("review", rev, drv, "user", 10)
+    with open(devpair.LEDGER, "a", encoding="utf-8") as fh:
+        fh.write('{"day":"')          # a torn write from a crashed run
+
+    try:
+        devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                          rev, drv, 10)
+        check("corrupt ledger under a cap -> SystemExit", False,
+              "counted a partial ledger as authoritative")
+    except SystemExit as e:
+        check("corrupt ledger under a cap -> SystemExit", True)
+        check("refusal names the unreadable lines", "unreadable" in str(e), str(e)[:120])
+
+    # `audit` must stay lenient — a human reading history should still see it.
+    check("audit still shows the readable records",
+          len(devpair.read_ledger()) == 1, "a corrupt line hid the whole history")
+    recs, corrupt = devpair._scan_ledger()
+    check("the scanner reports corruption rather than hiding it", corrupt == 1,
+          f"got {corrupt}")
+
+
+@isolated
+def test_torn_line_does_not_eat_the_next_record(base):
+    print("\n[audit] appending after a newline-less crash heals instead of compounding")
+    rev = {"provider": "p", "model": "m"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    devpair.log_invocation("review", rev, drv, "first", 10)
+    with open(devpair.LEDGER, "a", encoding="utf-8") as fh:
+        fh.write('{"partial')         # no trailing newline
+    devpair.log_invocation("review", rev, drv, "second", 10)
+    who = [r["requested_by"] for r in devpair.read_ledger()]
+    check("the record written after the torn line survives", "second" in who, f"got {who}")
+    check("and the record before it survives too", "first" in who, f"got {who}")
+    check("only the torn fragment is unreadable", devpair._scan_ledger()[1] == 1)
+
+
+@isolated
+def test_wrong_shaped_config_does_not_brick_the_cli(base):
+    print("\n[config] valid JSON of the wrong TYPE is ignored, not fatal")
+    for blob in ("[]", '"a string"', "42", "null"):
+        devpair.CONFIG.write_text(blob)
+        try:
+            devpair._load_cfg()
+            devpair.daily_cap()
+            devpair._load_roster()          # runs before argparse — must not raise
+            devpair.reviewer_candidates(None, "zai/glm-5.3")
+            check(f"config {blob!r} is survivable", True)
+        except AttributeError as e:
+            check(f"config {blob!r} is survivable", False, f"AttributeError: {e}")
+        except SystemExit:
+            check(f"config {blob!r} is survivable", True)  # a clean refusal is fine
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -1116,6 +1241,11 @@ def main():
         test_dry_run_is_free_and_never_logs,
         test_authorize_gates_before_the_paid_call,
         test_audit_command_surfaces_unattributed_runs,
+        test_cap_survives_concurrent_runs,
+        test_unwritable_ledger_fails_closed_only_when_enforcing,
+        test_corrupt_ledger_cannot_undercount_a_cap,
+        test_torn_line_does_not_eat_the_next_record,
+        test_wrong_shaped_config_does_not_brick_the_cli,
     ):
         t()
     print("\n" + "=" * 60)

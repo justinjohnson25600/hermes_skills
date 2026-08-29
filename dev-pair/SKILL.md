@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.6
+version: 1.1.7
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux]
@@ -54,6 +54,13 @@ Three mechanisms, in descending order of how much they can be trusted:
 | `daily_cap` in `config.json` | Hard ceiling on paid runs per day; the process refuses | **No** |
 | Invocation ledger | Every paid run appended before the call, with who asked | No (but it only records) |
 | `--requested-by WHO` | States who asked for this run | Yes — it is an attestation |
+
+Count-and-append happen under one file lock, so concurrent runs cannot both
+slip past the same cap. When a cap or `require_attestation` is in force the path
+**fails closed**: if the ledger cannot be written, or has unreadable lines that
+make today's count unprovable, the run is refused rather than allowed on an
+uncountable quota. With no cap set the ledger is best-effort and never blocks a
+review.
 
 ```bash
 devpair audit                 # who ran the pair, when, and who asked
@@ -270,7 +277,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 50 regression tests (211 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 55 regression tests (228 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -278,7 +285,7 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 50 regression tests (211 checks)
+- `test_devpair.py` — 55 regression tests (228 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

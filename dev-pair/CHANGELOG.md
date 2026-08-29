@@ -2,6 +2,42 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.7 — 2026-08-29
+
+Hardening the 1.1.6 cap after a cross-model review by `openai-codex/gpt-5.6-luna`
+found it was advisory in four separate ways. Every finding was reproduced with a
+live falsification harness before being fixed, and each now has a regression test.
+
+- **The cap was raceable.** `authorize()` did check-then-append with no lock, so
+  two processes both read `used < cap`, both appended, and both called a
+  backend. Reproduced: four concurrent runs against `daily_cap: 1` produced four
+  `ALLOWED` and four ledger entries. Count and append now happen under one
+  exclusive file lock (`flock`, `msvcrt` on Windows); the same repro now yields
+  exactly one allowed run and one ledger entry. Where no locking primitive
+  exists the cap degrades to advisory **and says so on stderr** rather than
+  quietly offering a guarantee it cannot keep.
+- **A ledger write failure silently permitted the paid call.** With the ledger
+  path unwritable the run proceeded unrecorded, which also made the cap
+  permanently uncountable (`runs_today()` stuck at 0). `log_invocation()` now
+  reports success, and when a cap or `require_attestation` is in force an
+  unrecordable run is refused. With nothing being enforced the ledger stays
+  best-effort — an audit trail should never block a review nobody limited.
+- **A corrupt line undercounted the quota.** Unreadable lines were skipped
+  silently, so a torn write let runs continue past the cap forever. `_scan_ledger()`
+  now returns a corruption count, and enforcement refuses on an unprovable
+  total: an unprovable limit is not a limit. `devpair audit` stays lenient, so a
+  human can still read the surviving history.
+- **A torn line ate the next record too** (found while verifying the above, not
+  in the review). A crashed writer leaves a line with no trailing newline, and
+  the next append concatenated onto it, destroying *both* records. Appends now
+  heal the missing newline first, and are `fsync`ed.
+- **Valid JSON of the wrong type bricked the whole CLI.** `config.json`
+  containing `[]` (or a string, number, or `null`) crashed `_load_cfg()`
+  consumers with `AttributeError` — and because `_load_roster()` runs before
+  argparse, even `devpair --help` died. Wider than reported: Luna named only
+  `daily_cap()`. Non-object configs are now ignored with a clear stderr note.
+- Tests: 50 → 55 (228 checks), including a threaded four-way race on the cap.
+
 ## 1.1.6 — 2026-08-29
 
 Enforcement. 1.1.5 declared the skill "USER-INVOKED ONLY" and then admitted, in
