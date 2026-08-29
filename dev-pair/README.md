@@ -45,13 +45,22 @@ Three design decisions do the heavy lifting:
 
 ### Quickest — one line
 
+macOS / Linux:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python3 - dev-pair
 ```
 
-That detects your Hermes home, installs the skill and its code, writes the
-`devpair` CLI, generates a reviewer roster from **your** configured providers,
-and runs the 58-test suite as an install gate. Then:
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python - dev-pair
+```
+
+That detects your Hermes home (`%LOCALAPPDATA%\hermes` on Windows), installs the
+skill and its code, writes the `devpair` CLI — a `.cmd` shim on Windows, an
+interpreter-chain script on POSIX — generates a reviewer roster from **your**
+configured providers, and runs the 58-test suite as an install gate. Then:
 
 ```bash
 devpair doctor          # confirm your backends answer
@@ -412,7 +421,7 @@ The suite pins every defect found during the tool's own development: self-review
 
 ## Version & history
 
-Current: **1.1.8**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.9**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

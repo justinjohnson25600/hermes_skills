@@ -81,7 +81,7 @@ def bin_dir() -> Path:
     return Path.home() / ".local" / "bin"
 
 
-def fetch(relpath: str) -> str | None:
+def fetch(relpath: str, quiet: bool = False) -> str | None:
     """Read a repo file — from the local clone if we're in one, else GitHub."""
     local = Path(__file__).resolve().parent / relpath
     if local.is_file():
@@ -91,7 +91,10 @@ def fetch(relpath: str) -> str | None:
         with urllib.request.urlopen(url, timeout=30) as r:  # noqa: S310
             return r.read().decode("utf-8")
     except Exception as e:
-        log(f"could not fetch {relpath}: {e}")
+        # quiet=True for optional files (a missing index is not an error the
+        # user needs to see while installing a skill by name).
+        if not quiet:
+            log(f"could not fetch {relpath}: {e}")
         return None
 
 
@@ -101,7 +104,7 @@ def list_skills() -> list[str]:
                    if p.is_dir() and (p / "SKILL.md").is_file())
     if local:
         return local
-    idx = fetch("skills.json")
+    idx = fetch("skills.json", quiet=True)
     if idx:
         try:
             return list(json.loads(idx))

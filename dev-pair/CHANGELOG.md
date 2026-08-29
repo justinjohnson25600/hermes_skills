@@ -4,6 +4,13 @@ Semver, newest first. Patch increments (+0.0.1) per published change.
 
 ## 1.1.9 — 2026-08-29
 
+- Docs/installer follow-up: both READMEs were left at 1.1.8 by the version bump,
+  and the install section was POSIX-only despite this being the Windows release
+  — it now shows the PowerShell one-liner (verified on a real Windows host) and
+  describes the `.cmd` shim and `%LOCALAPPDATA%\hermes` home. Repo now ships
+  `skills.json`, so a remote `--list` no longer prints a 404 on a first-time
+  install; optional fetches are quiet.
+
 Windows installability. Found while installing onto a Windows host: the skill
 installed but was invisible to every Hermes surface, and its own install gate
 failed 2 of 243 checks.
