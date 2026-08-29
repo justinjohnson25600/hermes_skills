@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.7
+version: 1.1.8
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux]
@@ -57,10 +57,13 @@ Three mechanisms, in descending order of how much they can be trusted:
 
 Count-and-append happen under one file lock, so concurrent runs cannot both
 slip past the same cap. When a cap or `require_attestation` is in force the path
-**fails closed**: if the ledger cannot be written, or has unreadable lines that
-make today's count unprovable, the run is refused rather than allowed on an
-uncountable quota. With no cap set the ledger is best-effort and never blocks a
-review.
+**fails closed**: if the ledger cannot be written, cannot be read, or has
+unreadable lines that make today's count unprovable, the run is refused rather
+than allowed on an uncountable quota — unknown usage is never treated as zero.
+If the filesystem offers no locking at all, a capped run refuses instead of
+pretending; `allow_unlocked_cap: true` opts in to an advisory cap. Keep the
+ledger on local disk: NFS/SMB can report a lock without excluding other hosts.
+With no cap set the ledger is best-effort and never blocks a review.
 
 ```bash
 devpair audit                 # who ran the pair, when, and who asked
@@ -277,7 +280,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 55 regression tests (228 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 58 regression tests (243 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, and truncation
 maths. No network required. Run after any change.
@@ -285,7 +288,7 @@ maths. No network required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 55 regression tests (228 checks)
+- `test_devpair.py` — 58 regression tests (243 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

@@ -231,37 +231,42 @@ class _ledger_lock:
         return False
 
 
-def _scan_ledger(days: int = 0) -> tuple[list[dict], int]:
-    """Parse the ledger, returning (records, corrupt_line_count).
+def _scan_ledger(days: int = 0) -> tuple[list[dict], int, bool]:
+    """Parse the ledger, returning (records, corrupt_line_count, readable).
 
-    The corrupt count is the honest part: a quota computed from a ledger with
-    unreadable lines is an UNDERCOUNT, and enforcement must know that rather
-    than silently under-reporting how much has been spent.
+    Three distinct outcomes, because enforcement must tell them apart:
+      - no ledger yet        -> ([], 0, True)   genuinely zero runs
+      - readable with junk   -> (recs, n, True) count is an UNDERCOUNT
+      - unreadable           -> ([], 0, False)  count is UNKNOWN, not zero
+
+    Collapsing the third into the first is a fail-open: a write-only or
+    permission-damaged ledger would report zero usage and reopen a spent cap.
     """
     if not LEDGER.is_file():
-        return [], 0
+        return [], 0, True
     cutoff = time.time() - days * 86400 if days else 0
     out: list[dict] = []
     corrupt = 0
     try:
-        for line in LEDGER.read_text(errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                corrupt += 1
-                continue
-            if not isinstance(rec, dict):
-                corrupt += 1
-                continue
-            if cutoff and rec.get("epoch", 0) < cutoff:
-                continue
-            out.append(rec)
+        raw = LEDGER.read_text(errors="replace")
     except OSError:
-        return [], 0
-    return out, corrupt
+        return [], 0, False
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            corrupt += 1
+            continue
+        if not isinstance(rec, dict):
+            corrupt += 1
+            continue
+        if cutoff and rec.get("epoch", 0) < cutoff:
+            continue
+        out.append(rec)
+    return out, corrupt, True
 
 
 def read_ledger(days: int = 0) -> list[dict]:
@@ -346,10 +351,35 @@ def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
     with _ledger_lock() as lock:
         if cap:
             if not lock.locked:
-                print("[devpair] WARNING: no file lock available on this platform — "
-                      "the daily cap is advisory here and two concurrent runs "
-                      "could both pass it.", file=sys.stderr)
-            recs, corrupt = _scan_ledger(days=2)
+                # A "hard" cap that cannot serialise is not hard. Refuse rather
+                # than continue under a guarantee we cannot keep — set
+                # allow_unlocked_cap to accept an advisory cap deliberately.
+                if not _load_cfg().get("allow_unlocked_cap"):
+                    sys.exit(
+                        "devpair: a daily cap is set, but no file lock is available "
+                        f"for {LEDGER}.\n"
+                        "  Without one, two concurrent runs can both pass the same cap,\n"
+                        "  so the limit cannot be enforced — refusing rather than\n"
+                        "  advertising a hard cap this filesystem cannot provide.\n"
+                        "  Note: network filesystems (NFS/SMB) may report a lock while\n"
+                        "  not excluding other hosts. Keep the ledger on local disk.\n"
+                        "  To accept an advisory cap anyway, set \"allow_unlocked_cap\": true "
+                        f"in {CONFIG}."
+                    )
+                print("[devpair] WARNING: no file lock available — the daily cap is "
+                      "advisory here (allow_unlocked_cap is set), and two concurrent "
+                      "runs could both pass it.", file=sys.stderr)
+            recs, corrupt, readable = _scan_ledger(days=2)
+            if not readable:
+                # Unreadable is NOT zero. Treating it as zero would reopen a cap
+                # that has already been spent.
+                sys.exit(
+                    f"devpair: the invocation ledger at {LEDGER} exists but cannot "
+                    "be read, so today's usage is unknown.\n"
+                    f"  A daily cap is set ({cap}/day) and unknown usage is not zero "
+                    "usage — refusing rather than risk overspending.\n"
+                    "  Check the file's permissions, then retry."
+                )
             if corrupt:
                 sys.exit(
                     f"devpair: the invocation ledger has {corrupt} unreadable "

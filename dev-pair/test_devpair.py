@@ -1150,9 +1150,10 @@ def test_corrupt_ledger_cannot_undercount_a_cap(base):
     # `audit` must stay lenient — a human reading history should still see it.
     check("audit still shows the readable records",
           len(devpair.read_ledger()) == 1, "a corrupt line hid the whole history")
-    recs, corrupt = devpair._scan_ledger()
+    recs, corrupt, readable = devpair._scan_ledger()
     check("the scanner reports corruption rather than hiding it", corrupt == 1,
           f"got {corrupt}")
+    check("and reports the ledger as readable", readable is True)
 
 
 @isolated
@@ -1168,6 +1169,7 @@ def test_torn_line_does_not_eat_the_next_record(base):
     check("the record written after the torn line survives", "second" in who, f"got {who}")
     check("and the record before it survives too", "first" in who, f"got {who}")
     check("only the torn fragment is unreadable", devpair._scan_ledger()[1] == 1)
+    check("the ledger itself is still readable", devpair._scan_ledger()[2] is True)
 
 
 @isolated
@@ -1185,6 +1187,125 @@ def test_wrong_shaped_config_does_not_brick_the_cli(base):
             check(f"config {blob!r} is survivable", False, f"AttributeError: {e}")
         except SystemExit:
             check(f"config {blob!r} is survivable", True)  # a clean refusal is fine
+
+
+@isolated
+def test_cap_holds_across_real_processes(base):
+    print("\n[audit] the cap holds across separate INTERPRETERS, not just threads")
+    # The thread test shares one interpreter; the real race is two `devpair`
+    # processes. This spawns actual subprocesses against a shared ledger.
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 1}))
+    mod = str(Path(devpair.__file__).parent)
+    driver = f"""
+import sys, json, argparse
+sys.path.insert(0, {mod!r})
+import devpair
+from pathlib import Path
+b = Path({str(base)!r})
+devpair.BASE = b
+devpair.CONFIG = b / "config.json"
+devpair.LEDGER = b / "invocations.jsonl"
+rev = {{"provider": "p", "model": "m"}}
+drv = {{"provider": "zai", "model": "glm-5.3"}}
+import time
+time.sleep(float(sys.argv[1]))          # crude barrier: line the processes up
+try:
+    devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                      rev, drv, 10)
+    print("allowed")
+except SystemExit:
+    print("refused")
+"""
+    script = base / "racer.py"
+    script.write_text(driver)
+    start = time.time() + 1.5
+    procs = [subprocess.Popen([sys.executable, str(script), str(max(0, start - time.time()))],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+             for _ in range(4)]
+    outs = [p.communicate()[0].strip() for p in procs]
+    check("exactly one of four real processes is allowed",
+          outs.count("allowed") == 1, f"got {outs}")
+    check("and the ledger holds exactly one entry",
+          len(devpair.read_ledger()) == 1, f"got {len(devpair.read_ledger())}")
+
+
+@isolated
+def test_unreadable_ledger_is_not_treated_as_zero(base):
+    print("\n[audit] an unreadable ledger means UNKNOWN usage, never zero usage")
+    rev = {"provider": "p", "model": "m"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 1}))
+    devpair.log_invocation("review", rev, drv, "user", 10)   # cap now spent
+    check("cap is spent", devpair.runs_today() == 1)
+
+    os.chmod(devpair.LEDGER, 0o222)                          # write-only
+    try:
+        recs, corrupt, readable = devpair._scan_ledger(days=2)
+        check("scanner reports the ledger as unreadable", readable is False,
+              "an unreadable ledger looked like an empty one")
+        try:
+            devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                              rev, drv, 10)
+            check("unreadable ledger under a cap -> SystemExit", False,
+                  "a spent cap reopened because usage read as zero")
+        except SystemExit as e:
+            check("unreadable ledger under a cap -> SystemExit", True)
+            check("refusal says usage is unknown", "unknown" in str(e).lower(),
+                  str(e)[:120])
+    finally:
+        os.chmod(devpair.LEDGER, 0o644)
+
+    # A ledger that does not exist yet is genuinely zero, and must still work.
+    devpair.LEDGER.unlink()
+    check("a missing ledger still reads as a real zero",
+          devpair._scan_ledger()[2] is True and devpair.runs_today() == 0)
+    devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                      rev, drv, 10)
+    check("and the first run on a fresh ledger is allowed", devpair.runs_today() == 1)
+
+
+@isolated
+def test_cap_refuses_when_it_cannot_lock(base):
+    print("\n[audit] an unlockable cap refuses rather than pretending to be hard")
+    rev = {"provider": "p", "model": "m"}
+    drv = {"provider": "zai", "model": "glm-5.3"}
+    devpair.CONFIG.write_text(json.dumps({"daily_cap": 5}))
+
+    real = devpair._ledger_lock
+
+    class NoLock(real):           # simulate a filesystem with no locking
+        def __enter__(self):
+            super().__enter__()
+            self.locked = False
+            return self
+
+    devpair._ledger_lock = NoLock
+    try:
+        try:
+            devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                              rev, drv, 10)
+            check("unlockable + capped -> SystemExit", False,
+                  "advertised a hard cap it could not enforce")
+        except SystemExit as e:
+            check("unlockable + capped -> SystemExit", True)
+            check("refusal names the escape hatch", "allow_unlocked_cap" in str(e),
+                  str(e)[:160])
+            check("refusal warns about network filesystems", "NFS" in str(e))
+
+        # Opting in explicitly is allowed — the user accepts an advisory cap.
+        devpair.CONFIG.write_text(json.dumps({"daily_cap": 5, "allow_unlocked_cap": True}))
+        devpair.authorize(argparse.Namespace(mode="review", requested_by="user"),
+                          rev, drv, 10)
+        check("allow_unlocked_cap lets it proceed deliberately",
+              devpair.runs_today() == 1)
+
+        # And with no cap at all, locking is irrelevant.
+        devpair.CONFIG.write_text(json.dumps({}))
+        devpair.authorize(argparse.Namespace(mode="review", requested_by=None),
+                          rev, drv, 10)
+        check("uncapped runs are unaffected by locking", devpair.runs_today() == 2)
+    finally:
+        devpair._ledger_lock = real
 
 
 def main():
@@ -1246,6 +1367,9 @@ def main():
         test_corrupt_ledger_cannot_undercount_a_cap,
         test_torn_line_does_not_eat_the_next_record,
         test_wrong_shaped_config_does_not_brick_the_cli,
+        test_cap_holds_across_real_processes,
+        test_unreadable_ledger_is_not_treated_as_zero,
+        test_cap_refuses_when_it_cannot_lock,
     ):
         t()
     print("\n" + "=" * 60)

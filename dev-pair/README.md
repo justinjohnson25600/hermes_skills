@@ -73,7 +73,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 228 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 243 checks, no network
 ```
 
 ### Configuration
@@ -183,16 +183,19 @@ an agent running the pair unasked would show up. It costs nothing to run.
 Set a ceiling in `<hermes-home>/devpair/config.json`:
 
 ```json
-{ "daily_cap": 10, "require_attestation": true }
+{ "daily_cap": 10, "require_attestation": true, "allow_unlocked_cap": false }
 ```
 
 Count-and-append run under one file lock, so two concurrent invocations cannot
 both pass the same cap, and a torn ledger line (from a crashed run) neither
 undercounts the quota nor destroys the record appended after it. When a cap or
 required attestation is active the path **fails closed** — an unwritable ledger
-or an unprovable count refuses the run instead of spending tokens nothing can
-account for. On a platform with no file locking the cap degrades to advisory and
-says so on stderr rather than pretending.
+an unreadable one, or an unprovable count refuses the run instead of spending
+tokens nothing can account for — unknown usage is never counted as zero. If the
+filesystem provides no locking, a capped run refuses rather than advertising a
+guarantee it cannot keep; set `"allow_unlocked_cap": true` to accept an advisory
+cap deliberately. Keep the ledger on local disk — NFS/SMB may report a lock
+while failing to exclude other hosts.
 
 `daily_cap: 0` (the default) means unlimited. `require_attestation` makes
 `--requested-by` mandatory, so a run with no named requester fails instead of
@@ -402,14 +405,14 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 55 regression tests (228 checks), no network required
+python3.11 test_devpair.py     # 58 regression tests (243 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.7**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.8**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

@@ -2,6 +2,37 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.8 — 2026-08-29
+
+Second round of the same Luna review. It accepted the 1.1.7 fixes and the
+uncapped-permissive asymmetry, then named three things that still stopped the
+cap being *reliably* hard. Two were real; the third was a fair challenge to the
+test, not the code.
+
+- **Unreadable is not zero.** `_scan_ledger()` turned any read `OSError` into
+  `([], 0)`, so a ledger that was appendable but not readable (write-only perms,
+  ownership damage) reported zero usage and reopened an already-spent cap.
+  Reproduced: cap 1, one run logged, `chmod 222` — the next run was allowed. The
+  scanner now returns a third value, `readable`, and distinguishes *no ledger
+  yet* (a genuine zero) from *cannot read it* (unknown). Enforcement refuses on
+  unknown.
+- **A cap that cannot lock is not a hard cap.** Previously an unavailable
+  `flock`/`msvcrt` degraded to a stderr warning and carried on, which is exactly
+  the "advertised guarantee we cannot keep" this layer exists to avoid. With a
+  cap set and no lock available, devpair now refuses; `allow_unlocked_cap: true`
+  opts in to an advisory cap deliberately. The refusal names NFS/SMB explicitly,
+  since a network filesystem can report a lock while not excluding other hosts —
+  the residual failure mode Luna correctly said cannot be detected after the
+  fact.
+- **The race test proved the wrong thing.** It was thread-only, sharing one
+  interpreter. Added a real multi-process test: four separate Python
+  interpreters, timed to collide on the same ledger, against `daily_cap: 1` —
+  exactly one is allowed and exactly one entry is written.
+- Luna's stale-lock concern was investigated and dismissed on its own advice:
+  POSIX `flock` releases on descriptor close, including process death, so a
+  leftover lock *file* is harmless.
+- Tests: 55 → 58 (243 checks).
+
 ## 1.1.7 — 2026-08-29
 
 Hardening the 1.1.6 cap after a cross-model review by `openai-codex/gpt-5.6-luna`
