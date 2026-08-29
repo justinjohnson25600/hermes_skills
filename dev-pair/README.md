@@ -82,7 +82,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 287 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 294 checks, no network
 ```
 
 ### Configuration
@@ -415,14 +415,14 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 62 regression tests (287 checks), no network required
+python3.11 test_devpair.py     # 63 regression tests (294 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
 
 ## Version & history
 
-Current: **1.1.10**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.11**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

@@ -1085,6 +1085,14 @@ One of: PROCEED / PROCEED WITH CHANGES / RECONSIDER / STOP, plus one sentence.""
 [STYLE/CLARITY] — wording, flow, or presentation issue
 [SAFETY/COMPLIANCE] — risk of harm, legal, medical, financial, or reputational
 
+## EVIDENCE BASIS
+One or two lines naming exactly what you were given and what you could NOT check.
+Name the artefact (path, line count, commit SHA or version) so the verdict says
+which revision it covers, and quote any command output verbatim rather than
+paraphrasing it. If you saw only part of the work, say so — and then cap your
+verdict at REVISE BEFORE USE. An APPROVE issued on a partial view launders a
+guess as an assurance.
+
 ## PASS 1 — ERRORS & PROBLEMS
 What is factually wrong, logically flawed, technically broken, misleading, unsafe,
 non-compliant, or likely to fail in the real world. For each:
@@ -1105,7 +1113,11 @@ Invented facts, sources, names, dates, numbers, studies, products, APIs,
 specifications or capabilities; authoritative-sounding but unevidenced claims;
 false precision; exaggerated certainty; unsupported statistics; outdated or
 time-sensitive information; missing citations or weak source grounding.
-Mark each [VERIFIED ERROR], [UNSUPPORTED CLAIM], [LIKELY ISSUE], or [ASSUMPTION].
+Mark each [VERIFIED ERROR], [UNSUPPORTED CLAIM], [LIKELY ISSUE], or [ASSUMPTION],
+and state which ones you could NOT check — an unchecked claim must not look like a
+cleared one. Anything here that is an actual defect also belongs in PASS 1 where it
+carries a severity; PASS 2 records check status only. Do not list it twice as
+though it were two problems.
 
 ## PASS 3 — GAPS & OMISSIONS
 What a competent professional would expect to find and cannot: missing evidence,
@@ -1114,22 +1126,24 @@ context, compliance checks, practical instructions, limitations, test cases, or
 failure modes. Do not list things absent because they are irrelevant.
 
 ## PASS 4 — IMPROVEMENT RECOMMENDATIONS
-The top 3-5 improvements ranked by impact, highest first. For each: what to change,
+Up to five improvements ranked by impact, highest first — or "None." if the work
+does not warrant any; do not pad to reach a count. For each: what to change,
 where, why it materially matters, and a concrete rewrite/example/checklist if
 applicable. Prioritise fixes preventing factual error, user harm, broken
 functionality, compliance risk, reputational damage, or serious misunderstanding.
 
-## PASS 5 — VERDICT
+## PASS 5 — CHECKS THAT WOULD SETTLE THIS
+List the specific commands, lookups, or sources that would confirm or refute your
+findings above — the evidence you could not gather yourself. Prefer runnable
+commands over vague advice. If none are needed, write "None." This section is the
+point of running a second model: name what the first one should go and check.
+
+## PASS 6 — VERDICT & WHAT HAPPENS NEXT
 One of: APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE
+(APPROVE WITH MINOR EDITS requires only [MINOR] findings AND a full evidence basis.)
 Then one short paragraph covering: overall assessment; the primary risk if used
 as-is; the single highest-leverage fix; and whether further external verification
-is required.
-
-## CHECKS THAT WOULD SETTLE THIS
-List the specific commands, lookups, or sources that would confirm or refute your
-findings above — the evidence you could not gather yourself. If none are needed,
-write "None." This section is the point of running a second model: name what the
-first one should go and check.""",
+is required.""",
 }
 
 VERIFY_ROLE = """You are an independent verifier performing a post-hoc critique of work

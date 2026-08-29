@@ -2,6 +2,24 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.11 — 2026-08-29
+
+The `verify` template had drifted from the verify-results skill it implements —
+caught by GLM-5.3 reviewing the skill, not by any check here.
+
+- **Template realigned to six passes.** `CHECKS THAT WOULD SETTLE THIS` is now
+  PASS 5 and the verdict is PASS 6, matching verify-results 0.0.1. The two files
+  are one contract in two copies; nothing mechanical was stopping them diverging.
+- **New EVIDENCE BASIS section**, demanded before PASS 1: name the artefact
+  (path, line count, SHA), quote command output verbatim, and cap the verdict at
+  REVISE BEFORE USE when only part of the work was seen. An APPROVE on a partial
+  view launders a guess as an assurance.
+- **PASS 2 no longer double-counts.** A defect found there also belongs in PASS 1
+  where it carries a severity; PASS 2 records check status only.
+- **PASS 4 no longer pads to a count** — "up to five, or None".
+- New test `test_verify_template_matches_the_verify_results_skill` pins all of
+  the above so the drift cannot recur silently. 62 → 63 tests (294 checks).
+
 ## 1.1.10 — 2026-08-29
 
 New `verify` mode, so a *verification* pass can be routed to a different model —

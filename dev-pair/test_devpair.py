@@ -1435,6 +1435,28 @@ def test_verdict_regex_tolerates_real_model_formatting(base):
     check("no verdict at all -> None", devpair.parse_verdict("no verdict here") is None)
 
 
+@isolated
+def test_verify_template_matches_the_verify_results_skill(base):
+    print("\n[verify] the routed template does not drift from the skill it implements")
+    # devpair's verify shape and the verify-results SKILL.md are two copies of one
+    # contract. GLM-5.3 caught them drifting (5 passes vs 6) in review; nothing
+    # mechanical was stopping that, so it is pinned here.
+    import re as _re
+    shape = devpair.SHAPES["verify"]
+    passes = _re.findall(r"## (PASS \d+ — [^\n]+)", shape)
+    check("six passes, in order", len(passes) == 6, f"got {len(passes)}: {passes}")
+    check("PASS 5 is the settling checks", "CHECKS THAT WOULD SETTLE THIS" in passes[4], passes[4])
+    check("PASS 6 is the verdict", "VERDICT" in passes[5], passes[5])
+    check("evidence basis is demanded before pass 1",
+          shape.index("## EVIDENCE BASIS") < shape.index("## PASS 1"))
+    check("partial evidence caps the verdict",
+          "cap your\nverdict at REVISE BEFORE USE" in shape or
+          "cap your verdict at REVISE BEFORE USE" in " ".join(shape.split()))
+    check("PASS 2 findings are not double-counted",
+          "PASS 2 records check status only" in " ".join(shape.split()))
+    check("PASS 4 does not pad to a count", '"None."' in shape and "do not pad" in shape)
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -1501,6 +1523,7 @@ def main():
         test_verify_verdicts_parse_and_gate,
         test_verify_mode_is_wired_into_the_cli,
         test_verdict_regex_tolerates_real_model_formatting,
+        test_verify_template_matches_the_verify_results_skill,
     ):
         t()
     print("\n" + "=" * 60)
