@@ -1,0 +1,16 @@
+#!/bin/sh
+# Release consistency gate. Installed by scripts/install-hooks.sh
+#
+# Blocks a push when the published docs would disagree with the code — the
+# failure that shipped a README a version behind to a public repo.
+# Bypass (rarely correct): git push --no-verify
+py=$(command -v python3.11 || command -v python3 || command -v python)
+[ -z "$py" ] && { echo "pre-push: no python found; skipping consistency gate"; exit 0; }
+"$py" "$(git rev-parse --show-toplevel)/check_consistency.py" --no-fetch || {
+  echo ""
+  echo "pre-push BLOCKED: docs and code disagree."
+  echo "  fix:    python3 check_consistency.py --fix"
+  echo "  bypass: git push --no-verify   (only if you mean it)"
+  exit 1
+}
+exit 0

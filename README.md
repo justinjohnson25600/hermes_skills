@@ -10,6 +10,23 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 |---|---|---|
 | [dev-pair](dev-pair/) | 1.1.9 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
 
+## Contributing / releasing
+
+Every published version string, test-count claim, and `platforms:` list has to
+agree with the code. That is checked mechanically, not by memory:
+
+```bash
+sh scripts/install-hooks.sh          # once per clone — installs a pre-push gate
+python3 check_consistency.py         # check
+python3 check_consistency.py --fix   # repair the mechanical drift
+```
+
+The gate blocks a push when a README lags a version bump, when a doc claims a
+test count the suite does not report, when `platforms:` omits a platform the
+code actually supports, when `skills.json` is stale, or when the copy installed
+under your Hermes home has drifted from the repo. It also refuses to let you
+reason about the remote from a stale ref — it fetches first.
+
 ## Installing a skill
 
 **One line, no clone:**
