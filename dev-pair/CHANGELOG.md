@@ -2,6 +2,26 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.12 — 2026-08-29
+
+Reviewed by GPT-5.6 Luna (verdict: NEEDS WORK). It ran live probes rather than
+reading, and was right on every material point.
+
+- **BLOCKER, self-inflicted in 1.1.11: the verdict parser could not read the
+  heading the template mandates.** `## PASS 6 — VERDICT & WHAT HAPPENS NEXT`
+  parsed as `None`, so every verify run stored no verdict and `--gate` failed
+  closed on a clean `APPROVE`. Found while checking one of Luna's claims, not
+  reported by it. The regex now accepts trailing words in the heading.
+- **The 1.1.11 drift pin was theatre.** It compared `SHAPES["verify"]` against
+  hardcoded strings and never opened verify-results/SKILL.md — editing the
+  canonical skill passed green. It now loads the real file (repo sibling, then
+  the install), compares pass numbering and titles, checks the normative clauses
+  exist on both sides, and asserts every verdict the skill defines is one the
+  gate can parse. Verified by Luna's own falsification: renaming PASS 5 in the
+  skill alone now fails.
+- Stale "five passes" comments corrected in the source and CLI epilog.
+- Tests 63 → 64 (305 checks).
+
 ## 1.1.11 — 2026-08-29
 
 The `verify` template had drifted from the verify-results skill it implements —

@@ -228,11 +228,20 @@ def check_live_install(skill: str, fix: bool) -> None:
     live_skill = home / "skills" / sj.get("category", "") / skill / "SKILL.md"
 
     for f in sj.get("files", []):
-        repo_f, live_f = ROOT / skill / f, state / f
+        # A markdown-only skill installs SKILL.md into skills/<category>/<name>/,
+        # not into a state_dir — checking state_dir there reports a false
+        # "not installed" and silently skips the drift check entirely.
+        live_f = live_skill if f == "SKILL.md" and not sj.get("state_dir") else state / f
+        repo_f = ROOT / skill / f
         if not live_f.is_file():
             note(f"[{skill}] {f} not installed live — skipped")
             continue
         if repo_f.read_bytes() != live_f.read_bytes():
+            # SKILL.md is compared line-by-line below, where deliberate
+            # machine-local deltas (author, ~/.hermes, ~/.hv) are allowed. A
+            # byte-compare here would fail on those every time.
+            if f == "SKILL.md":
+                continue
             if fix:
                 live_f.write_bytes(repo_f.read_bytes())
                 fixes.append(f"[{skill}] live {f} resynced from repo")

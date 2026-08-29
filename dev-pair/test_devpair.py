@@ -1397,7 +1397,8 @@ def test_verify_mode_is_wired_into_the_cli(base):
     src = Path(devpair.__file__).read_text()
     check("registered in the mode loop", '"followup", "verify"' in src)
     check("has an ASK_HINT", "verify" in devpair.ASK_HINT)
-    check("documented in the CLI epilog", "post-hoc five-pass critique" in src)
+    check("documented in the CLI epilog", "post-hoc six-pass critique" in src,
+          "epilog must state the same pass count as the canonical skill")
     # It is a paid call like any other: same family guard, same ledger, same cap.
     set_driver("glm-5.3", "zai")
     args = argparse.Namespace(
@@ -1435,26 +1436,64 @@ def test_verdict_regex_tolerates_real_model_formatting(base):
     check("no verdict at all -> None", devpair.parse_verdict("no verdict here") is None)
 
 
+def _canonical_skill_path():
+    """Locate verify-results/SKILL.md — repo sibling first, then the install."""
+    import pathlib
+    here = pathlib.Path(__file__).resolve().parent
+    for c in (here.parent / "verify-results" / "SKILL.md",
+              pathlib.Path.home() / ".hermes/skills/productivity/verify-results/SKILL.md"):
+        if c.is_file():
+            return c
+    for c in (pathlib.Path.home() / ".hermes/skills").rglob("verify-results/SKILL.md"):
+        return c
+    return None
+
+
+
 @isolated
 def test_verify_template_matches_the_verify_results_skill(base):
-    print("\n[verify] the routed template does not drift from the skill it implements")
-    # devpair's verify shape and the verify-results SKILL.md are two copies of one
-    # contract. GLM-5.3 caught them drifting (5 passes vs 6) in review; nothing
-    # mechanical was stopping that, so it is pinned here.
+    print("\n[verify] the routed template is pinned to the CANONICAL skill file")
+    # devpair's SHAPES["verify"] and verify-results/SKILL.md are two copies of one
+    # contract. GLM-5.3 caught them drifting (5 passes vs 6); the first version of
+    # this test then compared the template against hardcoded strings — editing the
+    # SKILL still passed green. GPT-5.6 Luna called that theatre and was right.
+    # This reads the real file.
     import re as _re
     shape = devpair.SHAPES["verify"]
-    passes = _re.findall(r"## (PASS \d+ — [^\n]+)", shape)
-    check("six passes, in order", len(passes) == 6, f"got {len(passes)}: {passes}")
-    check("PASS 5 is the settling checks", "CHECKS THAT WOULD SETTLE THIS" in passes[4], passes[4])
-    check("PASS 6 is the verdict", "VERDICT" in passes[5], passes[5])
-    check("evidence basis is demanded before pass 1",
-          shape.index("## EVIDENCE BASIS") < shape.index("## PASS 1"))
-    check("partial evidence caps the verdict",
-          "cap your\nverdict at REVISE BEFORE USE" in shape or
-          "cap your verdict at REVISE BEFORE USE" in " ".join(shape.split()))
-    check("PASS 2 findings are not double-counted",
-          "PASS 2 records check status only" in " ".join(shape.split()))
-    check("PASS 4 does not pad to a count", '"None."' in shape and "do not pad" in shape)
+    tmpl = _re.findall(r"## (PASS \d+) — ([^\n]+)", shape)
+
+    canon_path = _canonical_skill_path()
+    if canon_path is None:
+        # Not installed (CI, fresh clone). Pin the template's own shape so the
+        # test still has teeth, and say plainly what was not compared.
+        check("canonical SKILL.md not found — template shape checked alone",
+              len(tmpl) == 6, f"got {len(tmpl)}: {tmpl}")
+        return
+
+    canon = canon_path.read_text(encoding="utf-8")
+    skill = _re.findall(r"### (PASS \d+) — ([^\n]+)", canon)
+    check(f"canonical skill found at {canon_path.name}", bool(skill), "no PASS headings")
+    check("same number of passes", len(tmpl) == len(skill),
+          f"template {len(tmpl)} vs skill {len(skill)}")
+    for (tn, tt), (sn, st) in zip(tmpl, skill):
+        norm = lambda s: " ".join(s.split()).rstrip(".").upper()
+        check(f"{tn} title matches the skill", norm(tt) == norm(st),
+              f"template {tt!r} vs skill {st!r}")
+
+    # Normative clauses that must exist on BOTH sides, or the routed reviewer is
+    # held to a weaker contract than the inline one.
+    for clause, tkey, skey in (
+        ("evidence basis demanded", "EVIDENCE BASIS", "EVIDENCE BASIS"),
+        ("partial view caps the verdict", "REVISE BEFORE USE", "cap the verdict at REVISE BEFORE USE"),
+        ("PASS 2 not double-counted", "PASS 2 records check status only", "PASS 2 records *check status*"),
+    ):
+        check(f"{clause} (template)", tkey in " ".join(shape.split()), clause)
+        check(f"{clause} (skill)", skey in " ".join(canon.split()), clause)
+
+    # Every verdict the skill defines must be one the gate can actually read.
+    for v in _re.findall(r"^\| `([A-Z][A-Z ]+)` \|", canon, _re.M):
+        parsed = devpair.parse_verdict(f"## PASS 6 — VERDICT & WHAT HAPPENS NEXT\n{v}\nx")
+        check(f"gate can parse verdict {v!r}", parsed == v, f"got {parsed!r}")
 
 
 def main():

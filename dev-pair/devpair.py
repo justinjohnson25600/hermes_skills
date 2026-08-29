@@ -1073,7 +1073,9 @@ matters more than looking right.
 ## REMAINING VERDICT
 One of: PROCEED / PROCEED WITH CHANGES / RECONSIDER / STOP, plus one sentence.""",
 
-    # Mirrors the verify-results skill's five passes and label vocabulary
+    # Mirrors the verify-results skill's six passes and label vocabulary.
+    # Pinned to the canonical SKILL.md by
+    # test_verify_template_matches_the_verify_results_skill — edit both together.
     # EXACTLY. The labels are shared with quality-guard, so a flag raised here
     # must stay legible there — do not substitute devpair's own
     # [BLOCKER|MAJOR|MINOR] severity words in this shape.
@@ -1219,10 +1221,14 @@ BAD_VERDICTS = {"DO NOT SHIP", "STOP", "NEEDS WORK", "RECONSIDER",
                 "DO NOT USE", "REVISE BEFORE USE"}
 _VERDICT_RE = re.compile(
     # Tolerates the forms a model actually emits: with or without heading
-    # hashes, "PASS 5 — VERDICT", and an inline "VERDICT: APPROVE". Being
-    # strict here does not fail safe — it fails LOUD, turning a well-formed
-    # review into a spurious --gate failure.
-    r"^\s*#*\s*(?:PASS\s*\d+\s*[—\-–:]\s*)?(?:REMAINING\s+)?VERDICT\s*(?:[:：—\-–]\s*|$)\s*(.+?)$",
+    # hashes, "PASS 5 — VERDICT", "PASS 6 — VERDICT & WHAT HAPPENS NEXT", and
+    # an inline "VERDICT: APPROVE". Being strict here does not fail safe — an
+    # unparseable verdict fails the gate, so a well-formed review would be
+    # rejected on punctuation. The heading may carry trailing words; the
+    # verdict itself is then on the next line.
+    r"^\s*#*\s*(?:PASS\s*\d+\s*[—\-–:]\s*)?(?:REMAINING\s+)?VERDICT"
+    r"(?:\s*[&/][^\n]*|\s+(?:AND|WHAT)[^\n]*)?"
+    r"\s*(?:[:：—\-–]\s*|$)\s*(.+?)$",
     re.M | re.I,
 )
 
@@ -1674,7 +1680,7 @@ def main() -> int:
               debug      help find a bug you're stuck on
               alt        challenge the approach, get real alternatives
               followup   respond to the pair's earlier review
-              verify     post-hoc five-pass critique of finished work (verify-results)
+              verify     post-hoc six-pass critique of finished work (verify-results)
 
             examples:
               devpair critique --plan PLAN.md
