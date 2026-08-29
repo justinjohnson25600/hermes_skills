@@ -1,10 +1,10 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.8
+version: 1.1.9
 author: Justin Johnson
 license: MIT
-platforms: [macos, linux]
+platforms: [macos, linux, windows]
 metadata:
   hermes:
     tags: [code-review, critique, supervision, cross-model, debugging, pairing]

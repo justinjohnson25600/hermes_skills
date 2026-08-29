@@ -2,6 +2,26 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.9 — 2026-08-29
+
+Windows installability. Found while installing onto a Windows host: the skill
+installed but was invisible to every Hermes surface, and its own install gate
+failed 2 of 243 checks.
+
+- **`platforms:` said `[macos, linux]`.** Hermes filters skills against that
+  frontmatter list at seven call sites (`skill_matches_platform`), so on
+  Windows the skill installed but never appeared in the available-skills
+  list — despite 1.1.7 shipping first-class Windows support (`msvcrt`
+  locking, `.cmd` shim, `%LOCALAPPDATA%\hermes` home resolution). Now
+  `[macos, linux, windows]`.
+- **The unreadable-ledger tests were POSIX-only.** They simulated an
+  unreadable ledger with `chmod 0o222`, but on Windows chmod's read-only bit
+  blocks writes, never reads — the ledger stayed readable and both checks
+  failed (the production refusal itself was never exercised). On Windows the
+  test now simulates the same seam production code depends on (`read_text`
+  raising `OSError`); POSIX keeps the real chmod. All checks pass on Windows.
+
+
 ## 1.1.8 — 2026-08-29
 
 Second round of the same Luna review. It accepted the 1.1.7 fixes and the

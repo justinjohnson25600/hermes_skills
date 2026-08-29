@@ -1238,7 +1238,33 @@ def test_unreadable_ledger_is_not_treated_as_zero(base):
     devpair.log_invocation("review", rev, drv, "user", 10)   # cap now spent
     check("cap is spent", devpair.runs_today() == 1)
 
-    os.chmod(devpair.LEDGER, 0o222)                          # write-only
+    # Make the ledger unreadable for the scan. chmod 0o222 achieves that
+    # on POSIX only — on Windows the read-only bit blocks writes, never
+    # reads — so on Windows the same seam production code depends on
+    # (read_text raising OSError) is simulated instead.
+    if os.name == "nt":
+        class _UnreadablePath:
+            def __init__(self, real):
+                self._real = real
+            def is_file(self):
+                return True
+            def read_text(self, *a, **k):
+                raise OSError("simulated unreadable ledger")
+            def __str__(self):
+                return str(self._real)
+            def __fspath__(self):
+                return str(self._real)
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+        devpair.LEDGER = _UnreadablePath(devpair.LEDGER)
+
+        def _restore_ledger():
+            devpair.LEDGER = devpair.LEDGER._real
+    else:
+        os.chmod(devpair.LEDGER, 0o222)                      # write-only
+
+        def _restore_ledger():
+            os.chmod(devpair.LEDGER, 0o644)
     try:
         recs, corrupt, readable = devpair._scan_ledger(days=2)
         check("scanner reports the ledger as unreadable", readable is False,
@@ -1253,7 +1279,7 @@ def test_unreadable_ledger_is_not_treated_as_zero(base):
             check("refusal says usage is unknown", "unknown" in str(e).lower(),
                   str(e)[:120])
     finally:
-        os.chmod(devpair.LEDGER, 0o644)
+        _restore_ledger()
 
     # A ledger that does not exist yet is genuinely zero, and must still work.
     devpair.LEDGER.unlink()

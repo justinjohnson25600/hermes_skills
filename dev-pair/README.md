@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/ma
 
 That detects your Hermes home, installs the skill and its code, writes the
 `devpair` CLI, generates a reviewer roster from **your** configured providers,
-and runs the 35-test suite as an install gate. Then:
+and runs the 58-test suite as an install gate. Then:
 
 ```bash
 devpair doctor          # confirm your backends answer
