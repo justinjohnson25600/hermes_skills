@@ -760,9 +760,9 @@ def test_verify_claims_catches_hallucinated_anchors(base):
         check("no false positives on prose", clean == [], f"got {clean}")
 
         # Models cite in prose too — "README.md line 438", not "README.md:438".
-        # A Kimi review once produced fifteen findings against files it had never
-        # been sent, every anchor in this style, and the colon-only pattern
-        # cleared all of them. Both forms must be checked.
+        # The colon-only pattern cleared every prose anchor, including ones
+        # pointing at files the reviewer was never given. Both forms must be
+        # checked or the net has a hole exactly where it matters.
         for style in ("real.py line 999", "real.py on line 999", "real.py lines 999"):
             got = " | ".join(devpair.verify_claims(f"[MAJOR] {style} — past EOF", td))
             check(f"prose anchor caught: {style!r}", "real.py" in got and "999" in got,

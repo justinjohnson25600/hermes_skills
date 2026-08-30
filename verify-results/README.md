@@ -217,13 +217,15 @@ with no tools and no way to check itself. Before using a single finding:
 - **Read the `UNVERIFIED CLAIMS` block.** dev-pair resolves every `file:line` and
   `file line N` the reviewer cited against your tree. Citations to files you
   never sent mean the review is describing imagined material.
-- **Does it mention features, flags or versions you did not supply?** That is gap
-  filling, and the findings around it are suspect.
+- **Does it reason about things you did not send?** A reviewer calling a feature
+  non-existent when it simply was not in the packet is arguing from absence. That
+  is a thin packet — your problem to fix, not proof the reviewer is unreliable.
 - **Does its stated evidence basis match what you sent?**
 
-A report failing any of the last three is not partly useful — discard it and say
-the review failed. Picking the plausible findings out of a report that invented
-the rest is how a hallucination becomes a commit.
+Grade **each finding**, never the report as a whole. The two opposite mistakes
+cost the same: accepting everything because parts are right, and dismissing
+everything because parts are wrong. A review carrying one invented claim can
+still hold the most important true finding you get that day.
 
 Then **reproduce before you fix**. Run the PASS 5 checks; quote the output. A
 missed defect leaves you where you were, but a fabricated one makes you change
@@ -289,7 +291,7 @@ the PASS 5 commands yourself — that is the only fully independent path.
 
 ## Version & history
 
-Current: **0.0.7**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
+Current: **0.0.8**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
 published change.
 
 ## License

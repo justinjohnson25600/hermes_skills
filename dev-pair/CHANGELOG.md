@@ -2,17 +2,41 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.21 — 2026-08-30
+
+Documentation-only. No behaviour change; 366 checks unchanged.
+
+- **Retracts a claim made in 1.1.20's notes and in three source comments.** They
+  said a Kimi K3 review had cited "fifteen findings against files it had never
+  been sent". Re-checked against the packet that was actually sent: most of those
+  line numbers came from a grep dump inside the evidence file I supplied, so the
+  citations were legitimate. One claim in that review was invented; the rest were
+  misattributions and arguments from absence. Its central finding — the test
+  count — was correct, and matched the other reviewer independently.
+
+  The prose-anchor gap fixed in 1.1.20 is real and remains fixed. What was wrong
+  was the story told about how it was found.
+
 ## 1.1.20 — 2026-08-30
 
 Found by a cross-model documentation review, in two different ways: one reviewer
 reported a real error, the other demonstrated a hole by failing.
 
 - **Claim verification missed prose-style anchors.** `verify_claims` matched only
-  `file.py:438`, not `file.py line 438`. A Kimi K3 review produced fifteen
-  findings against files it had never been sent, every citation in the prose
-  style, and the safety net cleared all of them — the one mechanism specifically
-  built to catch a reviewer reasoning about things it cannot see. Both forms are
-  now checked; re-run against that review, all five sampled anchors are flagged.
+  `file.py:438`, never `file.py line 438` — and reviewers write both. Every prose
+  citation was therefore cleared unchecked, including ones naming files outside
+  the packet, which is the exact case this function exists to catch. Both forms
+  are now checked.
+
+  *Correction to an earlier draft of this entry:* it said a Kimi K3 review had
+  "produced fifteen findings against files it had never been sent". That was
+  wrong and is retracted. Most of those line numbers appeared inside a grep
+  dump in the evidence file I supplied, so the citations were legitimate, and
+  the review's central finding (the test count below) was correct. One claim in
+  it was genuinely invented; the rest were misattributions and reasoning errors.
+  The defect fixed here is real and was found via that review — but the review
+  was not fabricated, and characterising it that way was an unreproduced
+  conclusion of exactly the kind this tool is meant to prevent.
 
 - **The `--gate` severity vocabulary was undocumented per mode.** `verify` emits
   `[CRITICAL]` while every other mode emits `[BLOCKER]`. The gate has always
@@ -29,7 +53,9 @@ reported a real error, the other demonstrated a hole by failing.
 - **Corrected test counts.** The docs claimed 70 registered tests; the suite
   registers 68 at 1.1.19. The per-version chain in this changelog was
   reconstructed from git and corrected: 1.1.15=66, 1.1.16=66, 1.1.17=67,
-  1.1.18=67, 1.1.19=68. (Luna, VERIFIED ERROR — the claim was mine.)
+  1.1.18=67, 1.1.19=68. Found independently by BOTH reviewers — GPT-5.6 Luna and
+  Kimi K3 — which is the strongest signal a cross-model pass can give. The claim
+  was mine.
 
 - **Paid-call examples are labelled as abbreviated**, since the line after them
   calls `--driver` and `--requested-by` mandatory while the examples omit both.

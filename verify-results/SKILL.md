@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.7
+version: 0.0.8
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -335,17 +335,25 @@ you act on a single finding. Four checks, in order, all cheap:
    and `file line N` the reviewer cited against your tree and lists the ones that
    do not exist. Anchors to files you never sent are the signature of a review
    written about imagined material.
-3. **Does it reference anything outside the packet?** Features, flags, files or
-   versions you did not supply. A reviewer describing a capability you never
-   mentioned is filling gaps with invention, and every finding around it is
-   suspect.
+3. **Does it reason about things outside the packet?** A reviewer that says a
+   feature "does not exist" when you simply did not send it is arguing from
+   absence, not evidence — and so is a reviewer describing capabilities you never
+   supplied. Both mean the packet was too thin for that finding, which is *your*
+   error as much as theirs. Re-send with the missing material rather than
+   accepting or dismissing the finding.
 4. **Does the `EVIDENCE BASIS` describe what you actually sent?** If you sent
    three files and it discusses six, stop and re-read the whole report before
    using any of it.
 
-A report failing 2, 3 or 4 is not partially useful — **discard the findings and
-say the review failed**. Cherry-picking the plausible ones from a report that
-invented the rest is how a hallucination becomes a commit.
+A report failing check 2 or 4 is not partially useful — **discard it and say the
+review failed**. Check 3 is different: it usually means your packet was
+incomplete, so fix the packet and re-run rather than judging the reviewer.
+
+Either way, **grade findings individually, never the report as a whole.** The two
+opposite mistakes cost the same: accepting a whole report because parts of it are
+right, and dismissing a whole report because parts of it are wrong. A review
+carrying one invented claim can still hold the most important true finding you
+will get that day.
 
 **Then reproduce before you fix.** Every finding worth acting on can be
 demonstrated: run the command, print the value, plant the input. This is not
@@ -386,10 +394,14 @@ Frontier models share training data and failure modes. And a second opinion is
 still an opinion — a finding neither model can evidence stays unproven no matter
 how many models assert it.
 
-The stronger warning: **a routed review can be substantially fabricated and still
-read as competent.** Correct structure, plausible severities, precise-looking
-`file:line` citations — for files the reviewer was never sent. Fluency is not
-evidence, and a well-formatted report is not a checked one. That is the whole
-reason PASS 5 exists and why the triage above is not optional: the value of an
-independent pass comes from the findings you can *reproduce*, not from the
-report's tone or its confidence.
+The stronger warning: **a single report can mix a correct finding, a misread one,
+and an invented one — at identical confidence.** Reviewers misattribute evidence
+to the wrong file, treat a gap in the packet as proof of absence ("this feature
+does not exist" when it simply was not sent), and occasionally assert something
+with no basis at all. None of that is visible from the writing: structure,
+severities and citations look the same either way.
+
+So do not grade the report, grade each finding. Fluency is not evidence, and a
+well-formatted review is not a checked one. That is the whole reason PASS 5
+exists and why the triage above is not optional: the value of an independent pass
+comes from the findings you can *reproduce*, not from the report's tone.

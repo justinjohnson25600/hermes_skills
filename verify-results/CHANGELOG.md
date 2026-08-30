@@ -2,7 +2,42 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 0.0.8 — 2026-08-30
+
+**Corrects 0.0.7, which was written on a conclusion I had not reproduced.**
+
+0.0.7 said a routed review "came back substantially fabricated". Re-checked
+against the actual packet, that is wrong and is retracted. Most of the line
+numbers the reviewer cited appeared inside a grep dump in the evidence file it
+was given, so those citations were legitimate; one claim was genuinely invented;
+the rest were misattributions and arguments from absence — it called a flag
+non-existent because the flag was not in the packet I sent. Its central finding
+was correct and independently matched the other reviewer's.
+
+The irony is the point: I wrote a lesson about not acting on unreproduced
+findings, and the lesson itself was an unreproduced finding.
+
+- **"Discard the report" is now "grade each finding."** The blunt rule encoded my
+  own error. Two opposite mistakes cost the same — accepting a whole report
+  because parts are right, and dismissing a whole report because parts are wrong.
+  A review carrying one invented claim can still hold the most valuable true
+  finding in it.
+- **Triage check 3 rewritten.** "References anything outside the packet" is not
+  evidence of invention; usually it means the packet was too thin, which is the
+  sender's error. Re-send with the missing material instead of judging the
+  reviewer.
+- **The honest limit describes the real failure mode**, which is not wholesale
+  fabrication but a single report mixing a correct finding, a misread one, and an
+  invented one at identical confidence — invisible from the writing.
+
 ## 0.0.7 — 2026-08-30
+
+> **Retracted in 0.0.8 — see above.** The premise below ("substantially
+> fabricated") did not survive checking; the review was mixed, not fabricated,
+> and its central finding was correct. The guidance this entry added is sound and
+> was kept; the story it told about where the guidance came from was not. Left
+> in place rather than rewritten, because a changelog that silently edits its own
+> history is worth less than one that shows the correction.
 
 Written after a routed review came back substantially fabricated. The skill had
 detailed guidance on *sending* work out and on *reconciling two verdicts*, and
@@ -26,6 +61,8 @@ failure landed.
   understated it. A routed review can be substantially fabricated and still read
   as competent — correct structure, plausible severities, precise `file:line`
   citations to files the reviewer never saw. Fluency is not evidence.
+  *(0.0.8 narrows this: the observed failure was a mixed report, not a fabricated
+  one. The wording here overstated what had actually been checked.)*
 
 ## 0.0.6 — 2026-08-30
 

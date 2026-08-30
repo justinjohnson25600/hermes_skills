@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.20
+version: 1.1.21
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -340,7 +340,8 @@ a valid answer — the pair is instructed not to manufacture problems to look us
   and the prose `file line 438` styles. Anchors naming a missing file or a line
   past EOF are listed under `UNVERIFIED CLAIMS` — treat those findings with extra
   scepticism; the rest checked out against the tree. This is the net that catches
-  a reviewer critiquing files it was never sent.
+  a reviewer citing files it was never sent — and it only works if it understands
+  the citation style the reviewer used.
 - **Each turn reports token estimates** and stores the parsed verdict, blocker
   count and any unverified claims on the session, so `--json` gives a caller
   everything it needs without re-parsing prose.
