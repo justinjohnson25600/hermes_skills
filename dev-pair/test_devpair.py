@@ -375,6 +375,63 @@ def test_secrets_never_reach_the_prompt(base):
           "OPENAI_API_KEY" in ctx)
 
 
+@isolated
+def test_ask_focus_and_history_are_redacted_too(base):
+    print("\n[secrets] --ask/--focus/replayed history are redacted, not just gathered evidence")
+    # GPT-5.6 Terra found this: redact_secrets() ran only inside gather(), so the
+    # OTHER four blocks build_prompt assembles — ask, focus, and up to four
+    # replayed prior turns — reached the third-party API unscrubbed. The replay
+    # path is the nasty one: a reviewer that quoted a credential back at you in
+    # turn 1 re-sent it verbatim on every later turn of the session.
+    # Literals are assembled from parts so no scanner trips on this file.
+    key = "sk-" + "A1b2C3d4E5f6G7h8I9j0K1l2m3"
+    tok = "ghp_" + "9zYxWvUtSrQpOnMlKjIhGfEdCbA0"
+    pw = "postgres://admin:" + "h4nter2secret" + "@prod.db/main"
+    aws = "AKIA" + "IOSFODNN7EXAMPLE"
+
+    sess = {"turns": [{
+        "mode": "review", "at": "2026-08-30",
+        "ask": f"here is the token {tok}",
+        "response": f"Your config has {pw} hard-coded on line 4.",
+    }]}
+    prompt = devpair.build_prompt(
+        "verify", f"is {key} safe to commit?", "some clean evidence",
+        sess, f"the {aws} credential path",
+    )
+    for probe, where in ((key, "--ask"), (aws, "--focus"),
+                         (tok, "replayed prior ask"), (pw, "replayed prior response")):
+        check(f"secret in {where} is redacted", probe not in prompt,
+              "LEAKED — this string is posted to a third-party API")
+
+    # Redaction must not eat the prompt around it, or reviews become unreadable.
+    check("the question itself survives", "safe to commit?" in prompt)
+    check("the role block survives", "independent verifier" in prompt)
+    check("the output shape survives", "PASS 6" in prompt)
+    check("prior-turn framing survives", "ALREADY SAID THIS SESSION" in prompt)
+
+    # And the caller must be TOLD, or a silent redaction looks like clean input.
+    notes = []
+    devpair.build_prompt("review", f"token {tok}", "", {}, None, notes)
+    check("late redaction is reported to the caller",
+          any("redact" in n.lower() for n in notes), f"notes={notes}")
+
+    # Clean input must not manufacture a note.
+    quiet = []
+    devpair.build_prompt("review", "no secrets here", "plain code", {}, None, quiet)
+    check("clean prompt produces no redaction note", quiet == [], f"got {quiet}")
+
+
+def test_prompt_templates_survive_the_redactor():
+    print("\n[secrets] redacting the whole prompt must not corrupt devpair's own templates")
+    # Redacting late means the ROLE/SHAPES text passes through the redactor on
+    # every run. devpair's own docs were once mangled by exactly this (the
+    # auth-header pattern matching prose ABOUT auth headers), so pin it.
+    for name, text in ([("ROLE", devpair.ROLE), ("VERIFY_ROLE", devpair.VERIFY_ROLE)]
+                       + [(f"SHAPES[{k}]", v) for k, v in devpair.SHAPES.items()]):
+        _, n = devpair.redact_secrets(text)
+        check(f"{name} is not self-redacted", n == 0, f"{n} false positives")
+
+
 def test_redact_secrets_unit():
     print("\n[secrets] redactor: shapes, placeholders, and value-only replacement")
     cases = [
@@ -521,13 +578,132 @@ def test_parse_verdict_and_gate():
 
 
 @isolated
+def test_conflicting_verdicts_fail_closed(base):
+    print("\n[gate] a response carrying two DIFFERENT verdicts cannot pass the gate")
+    # GPT-5.6 Luna found this: parse_verdict() takes the FIRST match, so a review
+    # that says SHIP and later DO NOT SHIP was gated on the SHIP. A gate that
+    # cannot tell which verdict is the real one must refuse, not pick the
+    # convenient one — the same fail-closed rule already applied to an
+    # unparseable verdict.
+    conflicts = [
+        ("SHIP then DO NOT SHIP",
+         "## VERDICT\nSHIP\n\nlooks fine\n\n## VERDICT\nDO NOT SHIP\n\nbroken after all"),
+        ("APPROVE then DO NOT USE",
+         "## PASS 6 — VERDICT\nAPPROVE\n\n## PASS 6 — VERDICT\nDO NOT USE"),
+        ("quoted example then the real one",
+         "A review might say:\n## VERDICT\nAPPROVE\n\nMine:\n## VERDICT\nREVISE BEFORE USE"),
+        ("failing verdict FIRST is still a conflict",
+         "## VERDICT\nDO NOT USE\n\n## VERDICT\nAPPROVE"),
+    ]
+    for name, resp in conflicts:
+        failed, reason = devpair.gate_failed(resp)
+        check(f"gate blocks: {name}", failed is True, f"reason={reason!r}")
+        check(f"reason names the conflict: {name}", "conflict" in reason.lower(),
+              f"got {reason!r}")
+
+    # A verdict RESTATED identically is not a conflict — models summarise, and
+    # failing that would be a nuisance failure that teaches people to drop --gate.
+    same = "## VERDICT\nSHIP\n\nDetail...\n\n## VERDICT\nSHIP"
+    failed, reason = devpair.gate_failed(same)
+    check("an identically repeated verdict still passes", failed is False, reason)
+    check("repeated verdict still parses", devpair.parse_verdict(same) == "SHIP")
+
+    # And the single-verdict behaviour is unchanged.
+    for verdict, should_fail in (("SHIP", False), ("APPROVE", False),
+                                 ("DO NOT USE", True), ("NEEDS WORK", True)):
+        failed, _ = devpair.gate_failed(f"## VERDICT\n{verdict}\n\nreasoning")
+        check(f"single {verdict!r} unchanged", failed is should_fail)
+
+
+@isolated
 def test_gate_exit_code_end_to_end(base):
-    print("\n[gate] --gate is opt-in; default stays advisory (exit 0)")
-    import inspect
-    src = inspect.getsource(devpair.cmd_pair)
-    check("gate returns exit 2, distinct from 1 (backend failure)",
-          "return 2" in src, "no distinct gate exit code")
-    check("gate is conditional on args.gate", "args.gate and gate_fail" in src)
+    print("\n[gate] --gate really exits 2 from the CLI; default stays advisory (exit 0)")
+    # This test used to be `"return 2" in inspect.getsource(cmd_pair)`. It would
+    # have passed on a commented-out branch and failed on a harmless refactor to
+    # a named constant — the exact "green that proves nothing" this tool exists
+    # to catch. It now drives the real CLI with a stubbed reviewer.
+    # The backend is invoked as `hermes` from PATH, so the stub MUST be named
+    # `hermes` — naming it anything else silently calls the real binary and the
+    # test hangs on a live model call.
+    stub = base / "hermes"
+    log = base / "hermes_calls.log"
+
+    def write_stub(reply: str):
+        stub.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys, pathlib\n"
+            f"pathlib.Path({str(log)!r}).write_text(' '.join(sys.argv[1:])[:200])\n"
+            f"sys.stdout.write({reply!r})\n"
+        )
+        stub.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{base}{os.pathsep}" + env["PATH"]
+    env["DEVPAIR_DRIVER_MODEL"] = "claude-opus-5"
+    env["DEVPAIR_DRIVER_PROVIDER"] = "anthropic"
+
+    def run(reply, *extra):
+        write_stub(reply)
+        ev = base / "evidence.txt"
+        ev.write_text("def add(a, b):\n    return a + b\n")
+        return subprocess.run(
+            [sys.executable, str(Path(devpair.__file__)), "verify",
+             "--with", "kimi-coding/kimi-k3", "--files", str(ev),
+             "--ask", "check this", *extra],
+            capture_output=True, text=True, env=env, cwd=str(base),
+            # DEVNULL, not inherit: devpair drains a non-tty stdin, and an
+            # inherited pipe would block the child forever.
+            stdin=subprocess.DEVNULL, timeout=120)
+
+    bad = "## PASS 6 — VERDICT & WHAT HAPPENS NEXT\nDO NOT USE\n\nIt is broken."
+    good = "## PASS 6 — VERDICT & WHAT HAPPENS NEXT\nAPPROVE\n\nFine."
+    unparseable = "I have thoughts about this code but will not state a verdict."
+    crit = ("## PASS 6 — VERDICT & WHAT HAPPENS NEXT\nAPPROVE\n\n"
+            "[CRITICAL] it will delete the database")
+
+    r = run(bad, "--gate")
+    check("stub reviewer was actually invoked", log.exists(), "backend never called")
+    check("DO NOT USE + --gate -> exit 2", r.returncode == 2,
+          f"got {r.returncode}: {r.stderr[-300:]}")
+    check("gate says why", "GATE FAILED" in r.stderr, r.stderr[-200:])
+
+    r = run(bad)
+    check("DO NOT USE without --gate stays advisory (exit 0)", r.returncode == 0,
+          f"got {r.returncode}: {r.stderr[-300:]}")
+
+    r = run(good, "--gate")
+    check("APPROVE + --gate -> exit 0", r.returncode == 0,
+          f"got {r.returncode}: {r.stderr[-300:]}")
+
+    r = run(unparseable, "--gate")
+    check("unparseable verdict fails CLOSED -> exit 2", r.returncode == 2,
+          f"got {r.returncode}: {r.stderr[-300:]}")
+
+    r = run(crit, "--gate")
+    check("APPROVE carrying a [CRITICAL] -> exit 2", r.returncode == 2,
+          f"got {r.returncode}: {r.stderr[-300:]}")
+
+    # Luna's case, driven through the real CLI: a review that says SHIP and then
+    # DO NOT SHIP used to be gated on the SHIP.
+    conflict = ("## VERDICT\nSHIP\n\nlooks fine\n\n"
+                "## VERDICT\nDO NOT SHIP\n\nbroken after all")
+    r = run(conflict, "--gate")
+    check("conflicting verdicts -> exit 2", r.returncode == 2,
+          f"got {r.returncode}: {r.stderr[-300:]}")
+
+    # Exit 2 must stay distinguishable from exit 1 (backend failure), or CI
+    # cannot tell "the reviewer rejected it" from "the reviewer never answered".
+    stub.write_text("#!/bin/sh\nexit 3\n")
+    stub.chmod(0o755)
+    ev = base / "evidence.txt"
+    ev.write_text("x = 1\n")
+    r = subprocess.run(
+        [sys.executable, str(Path(devpair.__file__)), "verify",
+         "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--gate"],
+        capture_output=True, text=True, env=env, cwd=str(base),
+        stdin=subprocess.DEVNULL, timeout=120)
+    check("backend failure is exit 1, not the gate's 2", r.returncode == 1,
+          f"got {r.returncode}: {r.stderr[-300:]}")
 
 
 # --- F2: the reviewer's file:line claims are checked ---------------------------
@@ -1536,6 +1712,8 @@ def main():
         test_diff_ref_uses_merge_base,
         test_no_phantom_cmd_from_subcommand,
         test_secrets_never_reach_the_prompt,
+        test_ask_focus_and_history_are_redacted_too,
+        test_prompt_templates_survive_the_redactor,
         test_redact_secrets_unit,
         test_unknown_family_fails_closed,
         test_family_inferred_from_provider,
@@ -1543,6 +1721,7 @@ def main():
         test_untracked_files_are_read_not_just_named,
         test_missing_hermes_binary_is_soft_failure,
         test_parse_verdict_and_gate,
+        test_conflicting_verdicts_fail_closed,
         test_gate_exit_code_end_to_end,
         test_verify_claims_catches_hallucinated_anchors,
         test_doctor_probes_in_parallel,

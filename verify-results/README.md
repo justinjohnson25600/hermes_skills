@@ -68,6 +68,14 @@ Similarly, `--gate` reads the verdict and the severity labels. It cannot tell
 whether the stated evidence basis is honest, or whether an `APPROVE` was issued on
 a partial view. Treat it as a floor, not an assurance.
 
+Two practical limits worth knowing before you route anything out. The tool
+**clips oversized evidence** — roughly 24k characters per file, 60k for a diff,
+90k for the whole context — and marks the clip in-band so the reviewer can see it
+was not shown everything. Split large work into named slices rather than let that
+happen. And **redaction covers the whole outbound prompt**, your question and the
+replayed session history included, but it is pattern-based: a credential it does
+not recognise is sent.
+
 Honest limit: a different model family reduces shared blind spots, it does not
 eliminate them, and a finding neither model can evidence stays unproven.
 
@@ -82,7 +90,7 @@ runs inline and says so rather than silently ignoring your model choice.
 
 ## Version
 
-Current: **0.0.4**. See [CHANGELOG.md](CHANGELOG.md).
+Current: **0.0.5**. See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

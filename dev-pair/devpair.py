@@ -1187,7 +1187,8 @@ ASK_HINT = {
 }
 
 
-def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | None) -> str:
+def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | None,
+                 notes: list[str] | None = None) -> str:
     # `verify` critiques a finished deliverable that may not be code at all, so
     # it carries its own role. Every other mode is the software-supervision one.
     blocks = [VERIFY_ROLE if mode == "verify" else ROLE]
@@ -1207,7 +1208,21 @@ def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | Non
         "\nBe dense. Every line must earn its place. A short sharp review beats a "
         "long thorough-looking one. Do not restate the context back to them."
     )
-    return "\n".join(b for b in blocks if b)
+    prompt = "\n".join(b for b in blocks if b)
+    # FINAL chokepoint. gather() scrubs the evidence, but it is only ONE of the
+    # blocks above: --ask, --focus and the replayed prior turns never passed
+    # through it, so a credential typed into a question — or quoted back by the
+    # reviewer in turn 1 and replayed on every turn after — went to the API in
+    # clear. Redacting the assembled prompt is the only placement that covers
+    # every block, including any added later. Already-scrubbed context is not
+    # double-counted: the patterns skip existing [REDACTED:...] markers.
+    prompt, late = redact_secrets(prompt)
+    if late and notes is not None:
+        notes.append(
+            f"redacted {late} credential-shaped value(s) from the question, focus, "
+            "or replayed session history — check what you are pasting into --ask"
+        )
+    return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1235,23 +1250,35 @@ _VERDICT_RE = re.compile(
 
 def parse_verdict(response: str) -> str | None:
     """Extract the verdict token from a review. None if absent/unparseable."""
-    m = _VERDICT_RE.search(response or "")
-    if not m:
-        return None
-    line = m.group(1).strip().strip("*_` ").upper()
-    # Longest-first so "DO NOT SHIP" wins over "SHIP", and
-    # "PROCEED WITH CHANGES" over "PROCEED".
-    known = ["DO NOT SHIP", "SHIP AFTER FIXES", "PROCEED WITH CHANGES",
-             "NEEDS WORK", "RECONSIDER", "PROCEED", "SHIP", "STOP",
-             # verify mode. "APPROVE WITH MINOR EDITS" must beat "APPROVE",
-             # and "DO NOT USE" must beat nothing else — both handled by the
-             # longest-first sort below.
-             "APPROVE WITH MINOR EDITS", "REVISE BEFORE USE", "DO NOT USE",
-             "APPROVE"]
-    for tok in sorted(known, key=len, reverse=True):
-        if line.startswith(tok):
-            return tok
-    return None
+    tokens = _all_verdicts(response)
+    return tokens[0] if tokens else None
+
+
+def _all_verdicts(response: str) -> list[str]:
+    """Every distinct verdict token in the response, in order of appearance.
+
+    More than one DIFFERENT token means the review contradicts itself (or quotes
+    an example verdict), and the gate cannot know which is meant — see
+    gate_failed, which refuses rather than picking.
+    """
+    out: list[str] = []
+    for m in _VERDICT_RE.finditer(response or ""):
+        line = m.group(1).strip().strip("*_` ").upper()
+        # Longest-first so "DO NOT SHIP" wins over "SHIP", and
+        # "PROCEED WITH CHANGES" over "PROCEED".
+        known = ["DO NOT SHIP", "SHIP AFTER FIXES", "PROCEED WITH CHANGES",
+                 "NEEDS WORK", "RECONSIDER", "PROCEED", "SHIP", "STOP",
+                 # verify mode. "APPROVE WITH MINOR EDITS" must beat "APPROVE",
+                 # and "DO NOT USE" must beat nothing else — both handled by the
+                 # longest-first sort below.
+                 "APPROVE WITH MINOR EDITS", "REVISE BEFORE USE", "DO NOT USE",
+                 "APPROVE"]
+        for tok in sorted(known, key=len, reverse=True):
+            if line.startswith(tok):
+                if tok not in out:
+                    out.append(tok)
+                break
+    return out
 
 
 def count_blockers(response: str) -> int:
@@ -1268,12 +1295,20 @@ def gate_failed(response: str) -> tuple[bool, str]:
     """Should a --gate run exit non-zero? Returns (failed, reason).
 
     Fails closed on an unparseable verdict: a gate that cannot read the answer
-    must not report success.
+    must not report success. Also fails closed on CONFLICTING verdicts — a
+    review that says SHIP and later DO NOT SHIP was previously gated on
+    whichever came first, which is a fail-OPEN in the one component whose job
+    is to fail closed. An identical verdict restated is not a conflict.
     """
-    verdict = parse_verdict(response)
+    verdicts = _all_verdicts(response)
     blockers = count_blockers(response)
-    if verdict is None:
+    if not verdicts:
         return True, "no parseable VERDICT line in the review"
+    if len(verdicts) > 1:
+        return True, ("conflicting verdicts in one review: "
+                      + ", ".join(verdicts)
+                      + " — cannot tell which is meant")
+    verdict = verdicts[0]
     if verdict in BAD_VERDICTS:
         return True, f"verdict: {verdict}"
     if blockers:
@@ -1364,6 +1399,9 @@ def cmd_pair(args) -> int:
     context, notes = gather(args)
     for n in notes:
         print(f"[devpair] note: {n}", file=sys.stderr)
+    # Remember what has already been printed, so the late-redaction pass below
+    # reports only what IT found rather than repeating gather()'s notes.
+    printed_notes = list(notes)
 
     order = reviewer_candidates(args.reviewer, args.driver, getattr(args, 'with_model', None))
     reviewer = order[0]
@@ -1414,7 +1452,12 @@ def cmd_pair(args) -> int:
             file=sys.stderr,
         )
 
-    prompt = build_prompt(mode, args.ask or "", context, sess, args.focus)
+    prompt = build_prompt(mode, args.ask or "", context, sess, args.focus, notes)
+    # Redactions found in the question/focus/history are reported here, after
+    # --dry-run's free path, so the user learns what was scrubbed before a paid
+    # call goes out — not silently.
+    for n in notes[len(printed_notes):]:
+        print(f"[devpair] note: {n}", file=sys.stderr)
 
     # Gate + record the paid run. Placed AFTER --dry-run (which is free and must
     # stay free) and BEFORE the first backend call, so nothing is spent without

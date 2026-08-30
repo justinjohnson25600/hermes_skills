@@ -2,6 +2,48 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.15 — 2026-08-30
+
+Two defects found by GPT-5.6 Terra during a `verify-results` review, both
+reproduced with a falsification harness before being fixed.
+
+- **Redaction covered only one of five prompt blocks.** `redact_secrets()` ran
+  inside `gather()`, which scrubs the gathered evidence — but `build_prompt()`
+  assembles four more blocks around it, and `--ask`, `--focus` and the replayed
+  prior turns went to the third-party API in clear. The session-replay path was
+  the worst of the three: a reviewer that quoted a credential back at you in
+  turn 1 re-sent it verbatim on every later turn of the session, so one exposure
+  became one per turn. Redaction now runs on the fully assembled prompt, which
+  is the only placement that covers every block including ones added later, and
+  a stderr note tells you when something was caught in your question rather than
+  in the evidence. The redactor is idempotent (its patterns skip existing
+  `[REDACTED:...]` markers), so already-scrubbed evidence is not double-counted,
+  and a new test pins that the role/shape templates survive the pass unchanged —
+  a redactor that mangles the prompt describing it is a documented trap here.
+
+- **`test_gate_exit_code_end_to_end` tested nothing.** It was
+  `"return 2" in inspect.getsource(cmd_pair)` — a source-text grep wearing an
+  end-to-end name. Falsified by neutering the gate to `if False and args.gate`
+  while leaving the literal in place: the old test passed green on a completely
+  disabled gate. It now spawns the real CLI against a stubbed backend and
+  asserts actual exit codes — 2 on DO NOT USE, on an unparseable verdict, and on
+  an APPROVE carrying a `[CRITICAL]`; 0 without `--gate`; and 1, distinctly, on
+  backend failure so CI can tell rejection from unavailability. The replacement
+  fails 4 checks against that same broken gate.
+
+- **The gate failed OPEN on conflicting verdicts** — found by GPT-5.6 Luna
+  reviewing the two fixes above, and reproduced before fixing. `parse_verdict()`
+  returned the FIRST match, so a review saying `SHIP` and later `DO NOT SHIP` was
+  gated on the `SHIP` and passed. Same for `APPROVE` followed by `DO NOT USE`, and
+  for a review quoting an example verdict before giving its own. A gate that
+  cannot tell which verdict is meant must refuse, exactly as it already did for an
+  unparseable one: `gate_failed()` now collects every distinct verdict token and
+  blocks when there is more than one, naming them in the reason. An identical
+  verdict restated is not a conflict — that would be a nuisance failure that
+  teaches people to drop `--gate`.
+
+Tests: 64 → 66 (305 → 344 checks).
+
 ## 1.1.14 — 2026-08-30
 
 Found by deploying to three Windows boxes and refusing to accept a green number.

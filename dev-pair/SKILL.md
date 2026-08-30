@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.14
+version: 1.1.15
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -256,12 +256,17 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Safety Behaviours You Should Know
 
-- **Secrets are redacted before send.** Everything gathered passes through
-  `redact_secrets()` at one chokepoint: vendor tokens (`sk-`, `ghp_`, `AKIA`,
-  `xox`, `AIza`, `ya29`), JWTs, private-key blocks, URL passwords, secret-looking
-  `KEY=value` assignments and bearer tokens in `Authorization` headers become `[REDACTED:kind]`.
-  A stderr note reports the count. This is defence in depth, not a guarantee —
-  if the repo is full of live credentials, check the evidence before sending.
+- **Secrets are redacted before send — from the WHOLE prompt.** Gathered
+  evidence is scrubbed, and so is the assembled prompt: `--ask`, `--focus` and
+  the replayed prior turns all pass through `redact_secrets()` before the call.
+  That last one matters most — a reviewer that quoted a credential back at you in
+  turn 1 would otherwise re-send it verbatim on every later turn of the session.
+  Vendor tokens (`sk-`, `ghp_`, `AKIA`, `xox`, `AIza`, `ya29`), JWTs, private-key
+  blocks, URL passwords, secret-looking `KEY=value` assignments and bearer tokens
+  in `Authorization` headers become `[REDACTED:kind]`. A stderr note reports the
+  count and says whether it came from the evidence or from your question. This is
+  defence in depth, not a guarantee — if the repo is full of live credentials,
+  check the evidence before sending.
 - **Independence fails closed.** If the driver's family can't be identified from
   the model name, it is inferred from the provider; if it still can't, devpair
   REFUSES rather than offering an unprovable guarantee. Pass `--driver` to fix.
@@ -287,15 +292,17 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 64 regression tests (305 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 66 regression tests (344 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
-side-effects/atomicity, merge-base diffs, error propagation, and truncation
-maths. No network required. Run after any change.
+side-effects/atomicity, merge-base diffs, error propagation, truncation
+maths, prompt-wide redaction, and the `--gate` exit codes (driven through the
+real CLI with a stubbed backend, not asserted against source text). No network
+required. Run after any change.
 
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 64 regression tests (305 checks)
+- `test_devpair.py` — 66 regression tests (344 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

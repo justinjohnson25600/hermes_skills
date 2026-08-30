@@ -2,6 +2,27 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 0.0.5 — 2026-08-30
+
+Documentation caught up with what the tool actually does, after a review by
+GPT-5.6 Terra flagged a gap between the two.
+
+- **The routing appendix said "never summarise the work to make it fit" without
+  mentioning that the tool clips it for you.** Each `--files` entry is capped at
+  ~24k chars, a diff at ~60k, the whole context at ~90k. Clips are marked in-band
+  so the reviewer knows it saw only part — and can cap its verdict accordingly —
+  but a user following the no-summarising rule had no way to know truncation was
+  happening at all. The limits and the correct response (split into named slices)
+  are now stated next to the rule.
+
+- **The redaction boundary is wider than described.** dev-pair 1.1.15 moved
+  redaction from the evidence gatherer to the fully assembled prompt, so `--ask`,
+  `--focus` and replayed session history are scrubbed too. The privacy note now
+  describes that boundary rather than the narrower one, and still says plainly
+  that pattern-based redaction is a mitigation, not a guarantee.
+
+No change to the six passes, the labels, the severities, or the verdicts.
+
 ## 0.0.4 — 2026-08-30
 
 Packaging fix found by deploying to the estate.

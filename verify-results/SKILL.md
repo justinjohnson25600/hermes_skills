@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.4
+version: 0.0.5
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -239,8 +239,9 @@ reconciliation you did not perform.
 the lesser one:
 
 - **The work leaves the machine.** `--files` / `--diff` sends the content to a
-  third-party API. dev-pair redacts credential-shaped values at a single
-  chokepoint before sending, but pattern-based redaction is a mitigation, not a
+  third-party API. dev-pair redacts credential-shaped values from the whole
+  outbound prompt — evidence, `--ask`, `--focus` and replayed session history
+  alike — but pattern-based redaction is a mitigation, not a
   guarantee — assume anything it does not recognise is exposed. Never route work
   the user would not paste into that provider themselves.
 - **It costs a second set of tokens**, and the decision to spend them is theirs.
@@ -278,6 +279,17 @@ devpair verify --with <provider>/<model> \
   short instruction, never for the work itself.
 - **Never summarise the work to make it fit.** A critique of your summary is not
   a critique of the work, but it will read as though it were.
+- **The tool clips oversized evidence — know the limits before you rely on it.**
+  Each `--files` entry is capped (~24k chars), a diff at ~60k, and the whole
+  context at ~90k. A clip is marked in-band (`[... truncated: N chars omitted
+  ...]`) so the reviewer knows it did not see everything and can say so in its
+  EVIDENCE BASIS — but *you* should split the work into named slices rather than
+  let it happen, because a verdict on a clipped artefact is a verdict on part of
+  the work, which caps it at REVISE BEFORE USE.
+- **Secrets in the question are redacted too, not just in the files.** `--ask`,
+  `--focus` and the replayed session history pass through the same redactor as
+  the evidence, and a stderr note reports anything it caught. It is still
+  pattern-based — a credential it does not recognise goes out.
 - `--driver` must name the model **you are actually running on right now**, read
   from live session metadata — not `config.yaml`, which is usually stale in an
   override session. Getting this wrong points the independence guard at the wrong
