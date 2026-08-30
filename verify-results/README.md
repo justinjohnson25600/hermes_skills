@@ -82,7 +82,7 @@ runs inline and says so rather than silently ignoring your model choice.
 
 ## Version
 
-Current: **0.0.3**. See [CHANGELOG.md](CHANGELOG.md).
+Current: **0.0.4**. See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

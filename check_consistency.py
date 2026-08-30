@@ -136,6 +136,14 @@ def check_versions(skill: str, fix: bool) -> str | None:
                         fail(f"[{skill}] {doc} says \"the {claim} modes\" but the CLI "
                              f"defines {n} ({words.get(n, n)})")
 
+    # A markdown-only skill must NOT declare SKILL.md in files[]: install.py
+    # treats files[] as code for the state dir, so it lands a duplicate outside
+    # skills/. Shipped to three boxes before it was caught.
+    if "SKILL.md" in sj.get("files", []):
+        fail(f"[{skill}] skill.json lists SKILL.md in files[] — the installer will "
+             f"write a duplicate to <home>/{skill}/SKILL.md outside skills/. "
+             f"Remove it; the category path places SKILL.md.")
+
     cl = d / "CHANGELOG.md"
     if cl.is_file():
         heads = re.findall(r"^##\s*(\d+\.\d+\.\d+)", cl.read_text(encoding="utf-8"), re.M)

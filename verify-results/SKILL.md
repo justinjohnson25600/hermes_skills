@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.3
+version: 0.0.4
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]

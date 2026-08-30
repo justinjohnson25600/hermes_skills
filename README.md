@@ -26,7 +26,7 @@ test count the suite does not report, when `platforms:` omits a platform the
 code actually supports, when `skills.json` is stale, or when the copy installed
 under your Hermes home has drifted from the repo. It also refuses to let you
 reason about the remote from a stale ref — it fetches first.
-| [verify-results](verify-results/) | 0.0.3 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
+| [verify-results](verify-results/) | 0.0.4 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
 ## Installing a skill
 

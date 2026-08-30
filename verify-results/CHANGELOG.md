@@ -2,7 +2,18 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
-## 0.0.3 — 2026-08-29
+## 0.0.4 — 2026-08-30
+
+Packaging fix found by deploying to the estate.
+
+- `skill.json` listed `SKILL.md` under `files`, which the installer treats as
+  *code* to place in the skill's state directory. Every install therefore wrote a
+  second copy to `<hermes-home>/verify-results/SKILL.md`, outside `skills/`,
+  alongside the correct one — a duplicate the agent could load from the wrong
+  path, and a doc that would silently go stale. A markdown-only skill declares no
+  `files` at all: the installer places SKILL.md from the category path.
+
+ 2026-08-29
 
 README catch-up: 0.0.2 added the honesty caveats to SKILL.md but left the
 operator-facing README implying more than the tool delivers.
