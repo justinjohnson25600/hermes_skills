@@ -8,7 +8,8 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 
 | Skill | Version | What it does |
 |---|---|---|
-| [dev-pair](dev-pair/) | 1.1.15 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
+| [dev-pair](dev-pair/) | 1.1.16 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
+| [verify-results](verify-results/) | 0.0.5 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
 ## Contributing / releasing
 
@@ -26,7 +27,6 @@ test count the suite does not report, when `platforms:` omits a platform the
 code actually supports, when `skills.json` is stale, or when the copy installed
 under your Hermes home has drifted from the repo. It also refuses to let you
 reason about the remote from a stale ref — it fetches first.
-| [verify-results](verify-results/) | 0.0.5 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
 ## Delivering to a fleet
 
@@ -50,7 +50,30 @@ change:
 
 Set `enabled: false` with a `blocked_reason` for a machine that is known but not
 yet reachable; `--list` prints the reason so it stays visible instead of being
-quietly forgotten.
+quietly forgotten. Two boxes sit in that state today — `jj-hp-prodesk` and
+`jack-laptop` — both waiting on the mac's public key being authorised.
+
+### Editing a skill on another machine
+
+Deploys are one-way: `deploy.py` overwrites each agent's copy, so an edit made on
+a worker is destroyed by the next delivery. `contribute.py` is the way back.
+
+```bash
+python3 contribute.py --scan                     # what differs, on every agent
+python3 contribute.py --from hermes-windows      # show that box's changes
+python3 contribute.py --from hermes-windows --apply   # write them into the repo
+```
+
+`--apply` stages the files and stops — it never commits, never pushes, and never
+bumps a version. You review the diff, bump the version, run the tests, then
+commit and `deploy.py` it back out.
+
+`agents.json` carries an `authoring` flag. Only the origin box has it set, and
+`--scan` warns when an install-only agent has local edits that a deploy is about
+to overwrite. **The Windows agents deliberately hold no git credentials** —
+wincredman is broken there and non-interactive HTTPS has no tty to read a
+username from, so pulling over the existing SSH channel beats giving five
+machines push rights to a public repo.
 
 Four behaviours worth knowing, each of which exists because of a real failure:
 

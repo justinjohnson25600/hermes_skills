@@ -2,6 +2,27 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.16 — 2026-08-30
+
+Found by deploying 1.1.15 to the fleet and reading the check COUNT, not the
+"0 failed" line.
+
+- **The new end-to-end gate test was macOS-only, and failed silently as a
+  count.** It wrote the stubbed backend to an extensionless file with a
+  `#!` line. On Windows `PATHEXT` governs what is executable from PATH, so
+  `hermes` was never found, the real binary was never reached either, and all
+  eight gate assertions failed on every Windows box — 336 checks against 344 on
+  macOS. The stub is now a `.cmd` shim delegating to a `.py` payload on Windows
+  and a `/bin/sh` shim elsewhere.
+
+- **One assertion had been passing for the wrong reason.** "backend failure is
+  exit 1" was green on Windows *because* the stub was missing — every case was a
+  backend failure. The test now stops with an explicit failure if the stub was
+  never invoked, instead of emitting a wall of vacuous passes; a check that can
+  only pass when the harness is broken is worse than no check.
+
+No behaviour change to devpair itself. Tests: 66 (344 checks) on every platform.
+
 ## 1.1.15 — 2026-08-30
 
 Two defects found by GPT-5.6 Terra during a `verify-results` review, both

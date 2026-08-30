@@ -1,54 +1,173 @@
-# verify-results
+# verify-results — check the work before you rely on it
 
-Structured post-hoc critique of finished work — code, documents, or answers.
-
-Six passes produce severity-rated, labelled findings and a verdict:
+Structured post-hoc critique of finished work: code, documents, or answers. Six
+passes produce severity-rated, labelled findings and one of four verdicts —
 `APPROVE` / `APPROVE WITH MINOR EDITS` / `REVISE BEFORE USE` / `DO NOT USE`.
 
-## What it is for
+## The problem it solves
 
-You have something finished — a diff, a pull request, a config, a report, an
-answer — and you want it checked before it is merged, deployed, sent, or relied
-upon. This is the post-hoc gate. It does not help you write the thing; it tells
-you what is wrong with the thing you wrote.
+"Review this" produces a review that *sounds* rigorous and proves nothing. Three
+failures happen quietly, every time:
 
-Code is the primary case, but the passes are domain-agnostic. What changes
-between a migration and a market report is the *evidence*, not the method.
+1. **The reviewer does not say what it looked at.** A verdict issued on a
+   truncated diff reads exactly like one issued on the whole thing. It launders a
+   guess as an assurance, and nobody can tell afterwards which it was.
+2. **Confirmed errors get blurred with hunches.** "This is wrong", "this has no
+   evidence" and "I would have done it differently" are three different claims.
+   Mixed together, none of them is actionable.
+3. **It ends in an opinion.** Two reviewers disagree and there is no way to
+   settle it, so the louder one wins.
 
-## What makes it different from "review this"
+This skill closes each one. It opens with an **evidence basis** naming the
+artefact and quoting command output verbatim; it **labels** every finding by
+check-status and severity; and it ends with **runnable commands** that would
+settle each finding. A disagreement becomes a test, not a debate.
 
-Three things, all of which exist because an unstructured review quietly fails:
+## How it works
 
-1. **It states its evidence basis first.** A verdict issued on a truncated diff
-   is worse than no verdict, because it launders a guess as an assurance. If the
-   reviewer only saw part of the work, it must say so and cap the verdict.
-2. **It separates confirmed errors from unsupported claims and assumptions.**
-   These are different things. Blurring them is the most common way a review
-   sounds rigorous while proving nothing.
-3. **It ends with runnable checks, not just an opinion.** `PASS 5` names the
-   commands that would settle each finding — which is what makes a disagreement
-   resolvable rather than a matter of taste.
+You ask for it in plain English. The agent loads the skill and runs six passes
+over the work, in order:
 
-## Usage
+| Pass | What it produces |
+|---|---|
+| **Evidence basis** | One line: what was seen, what was run (quoted verbatim), what could not be checked |
+| **1 — Errors & problems** | Each with severity, label, location, evidence, confidence, and a fix |
+| **2 — Hallucination check** | Invented facts, sources, APIs, false precision — recorded as *check status*, not severity |
+| **3 — Gaps & omissions** | What a competent professional would expect and cannot find |
+| **4 — Improvements** | Up to five, ranked by impact — or **None.** |
+| **5 — Checks that would settle this** | The specific commands or sources that confirm or refute the findings |
+| **6 — Verdict** | One of four, plus the primary risk and the highest-leverage fix |
 
-Ask for it in plain English:
+Severities are `[CRITICAL]` / `[MAJOR]` / `[MINOR]`. Labels are
+`[VERIFIED ERROR]`, `[UNSUPPORTED CLAIM]`, `[LIKELY ISSUE]`, `[ASSUMPTION]`,
+`[STYLE/CLARITY]`, `[SAFETY/COMPLIANCE]`.
+
+Two rules do most of the work. **A partial view caps the verdict at
+`REVISE BEFORE USE`** — you cannot approve what you did not see. And **"no
+material issues" is a real result**: six headed passes create pressure to fill
+them, and manufacturing a finding to look thorough is a failure of the skill, not
+a success.
+
+## Installation
+
+Markdown-only. No code, no dependencies, no configuration.
+
+### Quickest — one line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python3 - verify-results
+```
+
+That finds your Hermes home (`$HERMES_HOME`, else `%LOCALAPPDATA%\hermes` on
+Windows, else `~/.hermes`) and places `SKILL.md` in the `productivity` category.
+
+### Manual install
+
+```bash
+mkdir -p <hermes-home>/skills/productivity/verify-results
+cp SKILL.md <hermes-home>/skills/productivity/verify-results/
+```
+
+### Prerequisites
+
+None for inline use — any model, any platform.
+
+Routing to a *different* model additionally needs the
+[dev-pair](../dev-pair/) skill at **v1.1.12 or later** (earlier versions have no
+`verify` subcommand) with `devpair` on PATH. Without it the skill runs inline and
+says so, rather than silently ignoring your model choice.
+
+### Verifying the install
+
+```bash
+ls <hermes-home>/skills/productivity/verify-results/SKILL.md   # should exist
+```
+
+There should be exactly **one** copy. If `SKILL.md` also appears at
+`<hermes-home>/verify-results/`, that is a stale artefact from an installer older
+than v0.0.4 — delete the stray directory.
+
+## Using it
+
+### 1. From a Hermes conversation — just ask
 
 ```
 verify this before I commit
 audit that output for hallucinations
 what's wrong with this migration?
+is this right?
+check this for hallucinations before it goes to the client
 ```
 
-A clean result is a real result. If there is nothing material, it says so in a
-few lines rather than manufacturing findings to look thorough.
+The skill triggers on any request for a second opinion on finished work —
+including the assistant's own previous output.
+
+### 2. What a clean result looks like
+
+Most reviews are not clean, but this matters more than the noisy case, because a
+tool that cannot say "this is fine" will invent problems to stay useful:
+
+```
+EVIDENCE BASIS: full diff at 4c1e8ab (18 lines, 1 file: src/auth.py).
+                Ran `pytest -q tests/test_auth.py` -> "12 passed in 0.4s"
+
+PASS 1 — ERRORS & PROBLEMS
+None.
+
+PASS 2 — HALLUCINATION & VERIFICATION CHECK
+No factual claims made; the change is a pure refactor. Nothing to verify.
+
+PASS 3 — GAPS & OMISSIONS
+None material. The existing test covers both branches of the changed condition.
+
+PASS 4 — IMPROVEMENT RECOMMENDATIONS
+None.
+
+PASS 5 — CHECKS THAT WOULD SETTLE THIS
+None.
+
+PASS 6 — VERDICT & WHAT HAPPENS NEXT
+APPROVE
+An 18-line rename with test coverage on both branches. No risk if used as-is.
+No further verification required.
+```
+
+Four words of praise and no invented findings. That is a correct output.
+
+### 3. What the verdicts commit you to
+
+| Verdict | Means | What happens next |
+|---|---|---|
+| `APPROVE` | No material issues found | Proceed. |
+| `APPROVE WITH MINOR EDITS` | Only `[MINOR]` findings **and** a full evidence basis | Apply the edits; no re-verification. |
+| `REVISE BEFORE USE` | `[MAJOR]` findings, **or** the evidence was partial | Fix, then re-run the skill on the revised work. |
+| `DO NOT USE` | `[CRITICAL]` findings | Stop. Do not ship or send. The critical findings get quoted to you. |
+
+`REVISE BEFORE USE` is a loop, not a rating: fix → re-verify → re-verdict, and
+the re-run must say it is a re-verification and what changed.
+
+### 4. Where it fits
+
+Best used where evidence, not opinion, decides:
+
+- **Pre-merge on a diff.** The strongest case — PASS 5 becomes runnable commands
+  rather than advice.
+- **Auditing generated output** for hallucinations, where separating a verified
+  error from an unsupported claim is the entire job.
+- **Client-facing or compliance-sensitive prose** before it is sent — the
+  `[SAFETY/COMPLIANCE]` label exists for exactly this.
+- **As a CI gate** via `devpair verify --gate` (exit 2 blocks).
+
+Not the tool for: producing work from scratch, or anything still in flight. It is
+a post-hoc gate — running it on a half-finished deliverable is a different job.
 
 ## Verifying with a different model
 
-By default it runs inline — the same model that produced the work, marking its
-own homework. That catches slips but is weak on blind spots, because the errors
-and the review of those errors come from the same priors.
+By default it runs **inline** — the same model that produced the work, marking
+its own homework. That catches slips but is weak on blind spots, because the
+errors and the review of them come from the same priors.
 
-If the [dev-pair](../dev-pair/) skill is installed you can name another model:
+With [dev-pair](../dev-pair/) installed you can name another model:
 
 ```
 verify this using kimi
@@ -56,43 +175,97 @@ verify with both
 ```
 
 `using both` runs inline *and* independently, then reconciles — by running the
-`PASS 5` checks and letting the evidence decide, not by averaging opinions.
+PASS 5 checks and letting the evidence decide, not by averaging opinions.
 
-Be aware of what that is and is not: **`using both` is a manual procedure, not an
-orchestrator.** Nothing runs the two passes and merges them for you, and nothing
-enforces the reconciliation steps — if the settling checks are not going to be
-run, ask for `using <model>` and read the two reports separately rather than
-claiming a reconciliation that did not happen.
+Underneath, that is:
 
-Similarly, `--gate` reads the verdict and the severity labels — it blocks on a
-failing verdict, a `[CRITICAL]` finding, an unparseable verdict, or two different
-verdicts in one review. What it cannot tell is whether the stated evidence basis
-is honest, or whether an `APPROVE` was issued on a partial view. Treat it as a
-floor, not an assurance.
+```bash
+devpair verify --with <provider>/<model> \
+               --driver <your-live-provider>/<your-live-model> \
+               --requested-by user \
+               --files report.md          # or --diff for code
+```
 
-Two practical limits worth knowing before you route anything out. The tool
-**clips oversized evidence** — roughly 24k characters per file, 60k for a diff,
-90k for the whole context — and marks the clip in-band so the reviewer can see it
-was not shown everything. Split large work into named slices rather than let that
-happen. And **redaction covers the whole outbound prompt**, your question and the
-replayed session history included, but it is pattern-based: a credential it does
-not recognise is sent.
+Four things to know before routing anything out:
 
-Honest limit: a different model family reduces shared blind spots, it does not
-eliminate them, and a finding neither model can evidence stays unproven.
+- **The work leaves your machine.** `--files`/`--diff` posts the content to a
+  third-party API. dev-pair redacts credential-shaped values from the whole
+  outbound prompt — evidence, your question, and replayed session history — but
+  it is pattern-based: anything it does not recognise is sent. Never route work
+  you would not paste into that provider yourself.
+- **It costs a second set of tokens.** That decision is the user's, so the skill
+  never routes unless asked.
+- **`using both` is a manual procedure, not an orchestrator.** Nothing runs the
+  two passes and merges them for you, and nothing enforces the reconciliation
+  steps. If the settling checks are not going to be run, ask for
+  `using <model>` and read the two reports separately rather than claiming a
+  reconciliation that did not happen.
+- **The tool clips oversized evidence** — roughly 24k characters per file, 60k
+  for a diff, 90k in total. Clips are marked in-band so the reviewer can see it
+  was not shown everything, but split large work into named slices rather than
+  let that happen.
 
-## Install
+### What `--gate` does and does not check
 
-Markdown-only; no code, no dependencies. Copy `SKILL.md` to
-`<hermes-home>/skills/<category>/verify-results/SKILL.md`.
+`devpair verify --gate` exits **2** on `DO NOT USE` / `REVISE BEFORE USE`, on any
+`[CRITICAL]` finding, on a verdict it cannot parse, and on a review carrying two
+*different* verdicts. It fails closed: an answer it cannot read, or cannot pick
+between, is never a pass.
 
-The model-routing appendix additionally requires `dev-pair` **v1.1.12 or later**
-(earlier versions have no `verify` subcommand). Without it the skill
-runs inline and says so rather than silently ignoring your model choice.
+What it **cannot** tell is whether the `EVIDENCE BASIS` line is honest, whether
+the reviewer really ran the command it quoted, or whether an `APPROVE` was issued
+on a partial view. A model that skips the evidence basis entirely and writes
+`APPROVE` passes the gate. Treat it as a floor — read the evidence basis yourself
+before trusting a pass.
 
-## Version
+## Troubleshooting
 
-Current: **0.0.5**. See [CHANGELOG.md](CHANGELOG.md).
+**"It approved something obviously broken."**
+Check the `EVIDENCE BASIS` line first. An approval on a partial view is the
+skill's known failure mode and the reason that line is mandatory — if it says the
+reviewer only saw a summary, the verdict should have been capped at
+`REVISE BEFORE USE`. Re-run with the real diff or file attached.
+
+**"It invented findings on work that was fine."**
+Padding is an explicit rule violation. Point at the worked example above; "None."
+in every pass is a valid output. If it keeps happening, the work being reviewed
+may be too vague for the passes to bite on — attach the actual artefact rather
+than describing it.
+
+**"I asked for another model and it reviewed inline anyway."**
+`devpair` is missing from PATH or is older than v1.1.12. Check with
+`devpair verify --help`; if the subcommand is absent, update dev-pair. The skill
+is supposed to tell you this rather than silently downgrade — if it did not, that
+is a bug worth reporting.
+
+**"The other model's review reads like it saw something else."**
+It probably did. The routed reviewer runs toolless in a separate process and
+cannot see your conversation, so the work must be serialised into the call with
+`--files`/`--diff`. A critique of a *summary* of the work reads exactly like a
+critique of the work. Never summarise to make it fit; slice it instead.
+
+**"Two models disagree and I don't know who's right."**
+That is what PASS 5 is for. Run the settling checks, show the raw output
+verbatim, and let the evidence decide. Where nothing settles it, report both
+positions as unresolved rather than manufacturing a consensus.
+
+## The honest limit
+
+A different model family reduces shared blind spots; it does not eliminate them.
+Frontier models share training data and failure modes. And a second opinion is
+still an opinion — a finding neither model can evidence stays unproven no matter
+how many models assert it.
+
+In inline and `both` modes there is also a structural conflict of interest: the
+model running the settling checks is the model that produced the work. It chooses
+the command and reports the result. The mitigations are verbatim output and an
+explicit line saying the producer also reconciled. For anything high-stakes, run
+the PASS 5 commands yourself — that is the only fully independent path.
+
+## Version & history
+
+Current: **0.0.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
+published change.
 
 ## License
 

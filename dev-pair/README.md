@@ -442,7 +442,7 @@ The suite pins every defect found during the tool's own development: self-review
 
 ## Version & history
 
-Current: **1.1.15**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.16**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

@@ -8,6 +8,7 @@ logic. The one reviewer-invocation test uses a deliberately invalid provider.
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -624,18 +625,37 @@ def test_gate_exit_code_end_to_end(base):
     # to catch. It now drives the real CLI with a stubbed reviewer.
     # The backend is invoked as `hermes` from PATH, so the stub MUST be named
     # `hermes` — naming it anything else silently calls the real binary and the
-    # test hangs on a live model call.
-    stub = base / "hermes"
+    # test hangs on a live model call. On Windows an extensionless shebang file
+    # is NOT executable via PATH (PATHEXT governs that), so the stub is a .cmd
+    # shim delegating to a .py payload. Getting this wrong made all 8 gate
+    # assertions fail on every Windows box while passing on macOS — and the
+    # 9th ("backend failure is exit 1") passed for the WRONG reason, because a
+    # missing stub is itself a backend failure.
+    impl = base / "_stub_impl.py"
+    win = os.name == "nt"
+    stub = base / ("hermes.cmd" if win else "hermes")
     log = base / "hermes_calls.log"
 
     def write_stub(reply: str):
-        stub.write_text(
-            "#!/usr/bin/env python3\n"
+        impl.write_text(
             "import sys, pathlib\n"
             f"pathlib.Path({str(log)!r}).write_text(' '.join(sys.argv[1:])[:200])\n"
             f"sys.stdout.write({reply!r})\n"
         )
-        stub.chmod(0o755)
+        if win:
+            stub.write_text(f'@echo off\r\n"{sys.executable}" "{impl}" %*\r\n')
+        else:
+            stub.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} "
+                            f"{shlex.quote(str(impl))} \"$@\"\n")
+            stub.chmod(0o755)
+
+    def write_failing_stub(code: int):
+        """A backend that exits non-zero without answering."""
+        if win:
+            stub.write_text(f"@echo off\r\nexit /b {code}\r\n")
+        else:
+            stub.write_text(f"#!/bin/sh\nexit {code}\n")
+            stub.chmod(0o755)
 
     env = dict(os.environ)
     env["PATH"] = f"{base}{os.pathsep}" + env["PATH"]
@@ -663,6 +683,14 @@ def test_gate_exit_code_end_to_end(base):
 
     r = run(bad, "--gate")
     check("stub reviewer was actually invoked", log.exists(), "backend never called")
+    if not log.exists():
+        # Everything below assumes the stub answered. Without that, each case is
+        # a backend failure and the whole test degrades into vacuous passes —
+        # which is exactly how this test shipped broken on Windows. Say so once
+        # and stop, rather than printing a wall of misleading results.
+        check("gate assertions are meaningful (stub on PATH)", False,
+              f"stub {stub.name} was never executed — remaining checks skipped")
+        return
     check("DO NOT USE + --gate -> exit 2", r.returncode == 2,
           f"got {r.returncode}: {r.stderr[-300:]}")
     check("gate says why", "GATE FAILED" in r.stderr, r.stderr[-200:])
@@ -693,8 +721,10 @@ def test_gate_exit_code_end_to_end(base):
 
     # Exit 2 must stay distinguishable from exit 1 (backend failure), or CI
     # cannot tell "the reviewer rejected it" from "the reviewer never answered".
-    stub.write_text("#!/bin/sh\nexit 3\n")
-    stub.chmod(0o755)
+    # NOTE: this check is only meaningful because the stub above WAS found and
+    # invoked — a stub that never runs makes every case a backend failure and
+    # this assertion passes vacuously.
+    write_failing_stub(3)
     ev = base / "evidence.txt"
     ev.write_text("x = 1\n")
     r = subprocess.run(

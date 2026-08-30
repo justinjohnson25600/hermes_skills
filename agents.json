@@ -1,5 +1,5 @@
 {
-  "_comment": "Hermes agents that receive skill installs and updates. Edit this file, not the deploy script. `python3 deploy.py --list` shows status; `python3 deploy.py <skill>` delivers to every enabled agent.",
+  "_comment": "Hermes agents that receive skill installs and updates. Edit this file, not the deploy script. `python3 deploy.py --list` shows status; `python3 deploy.py <skill>` delivers to every enabled agent. `authoring: true` means skills may be EDITED there and pushed back \u2014 see contribute.py and CONTRIBUTING.md; every other box is install-only and its local edits are overwritten by the next deploy.",
   "agents": [
     {
       "name": "justins-mac-mini",
@@ -9,7 +9,8 @@
       "hermes_home": "~/.hermes",
       "enabled": true,
       "role": "origin",
-      "notes": "Development box and source of truth. Skills are authored here; deploys originate here."
+      "notes": "Development box and source of truth. Skills are authored here; deploys originate here.",
+      "authoring": true
     },
     {
       "name": "hermes-windows",
@@ -19,7 +20,8 @@
       "hermes_home": "%LOCALAPPDATA%\\hermes",
       "enabled": true,
       "role": "sentinel",
-      "notes": "SENTINEL host. NetBIOS name 'Hermes'. Six profiles, eleven cron jobs."
+      "notes": "SENTINEL host. NetBIOS name 'Hermes'. Six profiles, eleven cron jobs.",
+      "authoring": false
     },
     {
       "name": "gmtek-m8",
@@ -29,7 +31,8 @@
       "hermes_home": "%LOCALAPPDATA%\\hermes",
       "enabled": true,
       "role": "worker",
-      "notes": "NetBIOS name 'NucBox_M8'. Single provider family (zai) — devpair writes a TEMPLATE roster and cannot do independent review until a second family is configured."
+      "notes": "NetBIOS name 'NucBox_M8'. Single provider family (zai) \u2014 devpair writes a TEMPLATE roster and cannot do independent review until a second family is configured.",
+      "authoring": false
     },
     {
       "name": "jj-amd",
@@ -39,7 +42,8 @@
       "hermes_home": "%LOCALAPPDATA%\\hermes",
       "enabled": true,
       "role": "worker",
-      "notes": "Tailnet hostname is amd-jj-canvey, NOT jj-amd. RTX 5090 32GB — runs larger local models than any other box. SSH user is Justin@, not justi@."
+      "notes": "Tailnet hostname is amd-jj-canvey, NOT jj-amd. RTX 5090 32GB \u2014 runs larger local models than any other box. SSH user is Justin@, not justi@.",
+      "authoring": false
     },
     {
       "name": "jj-hp-prodesk",
@@ -50,17 +54,57 @@
       "enabled": false,
       "role": "worker",
       "blocked_reason": "sshd is listening and the box pings, but the mac's key is not authorised for any username (justi/Justin/justinjohnson/jj/hermes all denied). Enable by appending the mac pubkey to C:\\ProgramData\\ssh\\administrators_authorized_keys on that box, then set enabled=true and confirm the username.",
-      "notes": "Never onboarded. Hermes presence unconfirmed — verify it actually runs Hermes before treating a deploy failure as a regression."
+      "notes": "Never onboarded. Hermes presence unconfirmed \u2014 verify it actually runs Hermes before treating a deploy failure as a regression.",
+      "authoring": false
+    },
+    {
+      "name": "jack-laptop",
+      "host": "justi@100.102.22.3",
+      "tailnet_ip": "100.102.22.3",
+      "platform": "windows",
+      "hermes_home": "%LOCALAPPDATA%\\hermes",
+      "enabled": false,
+      "role": "worker",
+      "blocked_reason": "publickey denied \u2014 the mac's key was never installed. Enable by appending the mac pubkey (ssh-ed25519 ...Hi3MXt hermes-macmini) to C:\\ProgramData\\ssh\\administrators_authorized_keys on that box, confirm the username (justi/Justin both untested), then set enabled=true.",
+      "notes": "Awaiting access. Hermes presence unconfirmed \u2014 verify Hermes runs there before treating a deploy failure as a regression.",
+      "authoring": false
     }
   ],
   "unreachable_not_enrolled": [
-    {"name": "coley-micro-pc", "ip": "100.127.91.83", "why": "port 22 times out — no sshd or firewalled"},
-    {"name": "jack-laptop", "ip": "100.102.22.3", "why": "publickey denied; key never installed"},
-    {"name": "desktop-ag6v2jr-docker-desktop", "ip": "100.107.106.89", "why": "port 22 refused (Linux, container host)"},
-    {"name": "g0ksc-lap", "ip": "100.113.122.77", "why": "offline"},
-    {"name": "laptop", "ip": "100.94.249.118", "why": "offline"},
-    {"name": "macbook-pro", "ip": "100.93.198.34", "why": "offline"},
-    {"name": "ryzen-spain", "ip": "100.84.47.32", "why": "offline"},
-    {"name": "trigkey-g4", "ip": "100.89.220.87", "why": "offline"}
+    {
+      "name": "coley-micro-pc",
+      "ip": "100.127.91.83",
+      "why": "port 22 times out \u2014 no sshd or firewalled"
+    },
+    {
+      "name": "desktop-ag6v2jr-docker-desktop",
+      "ip": "100.107.106.89",
+      "why": "port 22 refused (Linux, container host)"
+    },
+    {
+      "name": "g0ksc-lap",
+      "ip": "100.113.122.77",
+      "why": "offline"
+    },
+    {
+      "name": "laptop",
+      "ip": "100.94.249.118",
+      "why": "offline"
+    },
+    {
+      "name": "macbook-pro",
+      "ip": "100.93.198.34",
+      "why": "offline"
+    },
+    {
+      "name": "ryzen-spain",
+      "ip": "100.84.47.32",
+      "why": "offline"
+    },
+    {
+      "name": "trigkey-g4",
+      "ip": "100.89.220.87",
+      "why": "offline"
+    }
   ]
 }
