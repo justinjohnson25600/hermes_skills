@@ -1,6 +1,6 @@
 {
   "name": "dev-pair",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "category": "software-development",
   "description": "Second-opinion critique/review from a different LLM.",
   "state_dir": "devpair",

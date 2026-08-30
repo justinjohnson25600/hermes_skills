@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.17
+version: 1.1.18
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -284,6 +284,12 @@ a valid answer — the pair is instructed not to manufacture problems to look us
   (max 5 files, 8k chars each; binaries skipped).
 - **A missing `hermes` binary is a soft failure** — it falls through to the next
   backend instead of crashing.
+- **The backend command is resolved, not assumed.** `hermes` is looked up through
+  `PATHEXT` on Windows, so a `.cmd`/`.bat` shim works and not only a `.exe`. If
+  Hermes lives somewhere PATH cannot reach, or behind a wrapper, set
+  `DEVPAIR_HERMES_CMD` to a full command prefix
+  (`DEVPAIR_HERMES_CMD="/usr/bin/python3 /opt/hermes/cli.py"`) and the reviewer
+  arguments are appended to it.
 
 - **The pair's `file:line` claims are auto-verified.** Anchors that name a
   missing file or a line past EOF are listed under `UNVERIFIED CLAIMS` — treat
@@ -294,7 +300,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 67 regression tests (347 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 68 regression tests (351 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, truncation
 maths, prompt-wide redaction, and the `--gate` exit codes (driven through the
@@ -304,7 +310,7 @@ required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 67 regression tests (347 checks)
+- `test_devpair.py` — 68 regression tests (351 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

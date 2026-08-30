@@ -8,7 +8,7 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 
 | Skill | Version | What it does |
 |---|---|---|
-| [dev-pair](dev-pair/) | 1.1.17 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
+| [dev-pair](dev-pair/) | 1.1.18 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
 | [verify-results](verify-results/) | 0.0.5 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
 ## Contributing / releasing

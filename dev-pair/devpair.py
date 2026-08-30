@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1357,22 +1358,32 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text or "") // 4)
 
 
-def _hermes_binary() -> str:
-    """Resolve the `hermes` executable, honouring PATHEXT on Windows.
+def _hermes_command() -> list[str]:
+    """The command prefix that launches the reviewer backend.
 
-    A bare "hermes" in a subprocess list goes to CreateProcess, which only ever
-    appends `.exe` — so a `.cmd`/`.bat` shim on PATH is invisible, even though
-    every other Windows tool would find it. That matters because this skill's own
-    manual-install instructions tell people to put a shim on PATH. shutil.which
-    walks PATHEXT properly. Falls back to the bare name so a missing binary still
-    produces the existing soft failure rather than a new one here.
+    Two portability problems, one answer:
+
+    * A bare "hermes" in a subprocess list reaches CreateProcess on Windows,
+      which only ever appends `.exe` and never consults `PATHEXT` — so the
+      `.cmd`/`.bat` shim this skill's own manual-install section tells you to
+      create was invisible. `shutil.which` walks PATHEXT properly.
+    * Some installs put Hermes somewhere PATH does not reach, or behind a
+      wrapper (a venv launcher, a container shim). `DEVPAIR_HERMES_CMD` takes a
+      full command prefix — e.g. `/usr/bin/python3 /opt/hermes/cli.py` — and the
+      reviewer arguments are appended to it.
+
+    Falls back to the bare name so a genuinely missing binary still produces the
+    existing soft failure rather than a new error here.
     """
-    return shutil.which("hermes") or "hermes"
+    override = os.environ.get("DEVPAIR_HERMES_CMD", "").strip()
+    if override:
+        return shlex.split(override, posix=(os.name != "nt"))
+    return [shutil.which("hermes") or "hermes"]
 
 
 def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tuple[bool, str]:
-    cmd = [
-        _hermes_binary(), "-z", prompt,
+    cmd = _hermes_command() + [
+        "-z", prompt,
         "-m", reviewer["model"],
         "--provider", reviewer["provider"],
         "-t", "",

@@ -2,6 +2,28 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.18 — 2026-08-30
+
+The 1.1.17 fix was right about the cause and incomplete about the remedy; the
+fleet said so.
+
+- **`DEVPAIR_HERMES_CMD` overrides the backend command.** PATHEXT resolution
+  (1.1.17) is necessary but not sufficient: a `.cmd` shim still could not be
+  launched reliably on the Windows agents. Rather than keep guessing at shim
+  mechanics, the backend command is now overridable as a full prefix —
+  `DEVPAIR_HERMES_CMD="/usr/bin/python3 /opt/hermes/cli.py"` — which also serves
+  the real cases of Hermes behind a venv launcher, a container shim, or a path
+  PATH does not reach.
+
+- **The end-to-end gate test no longer depends on OS shim rules.** It delivered
+  its stubbed backend as an executable file on PATH, and "executable" means
+  different things per platform — which is precisely why it passed on macOS and
+  failed on every Windows box for two releases running. It now uses the override
+  above to run the current interpreter directly, so it works anywhere Python
+  does, and exercises a documented feature while it is at it.
+
+Tests: 67 → 68 (347 → 351 checks).
+
 ## 1.1.17 — 2026-08-30
 
 A real Windows defect, surfaced by fixing the test that was hiding it.

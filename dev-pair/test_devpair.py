@@ -631,10 +631,15 @@ def test_gate_exit_code_end_to_end(base):
     # assertions fail on every Windows box while passing on macOS — and the
     # 9th ("backend failure is exit 1") passed for the WRONG reason, because a
     # missing stub is itself a backend failure.
+    # The stub is delivered via DEVPAIR_HERMES_CMD rather than a shim on PATH.
+    # A PATH shim has to be executable BY THE OS, and the rules differ per
+    # platform (PATHEXT on Windows, +x and a shebang elsewhere) — that
+    # difference made this test pass on macOS and fail on every Windows box.
+    # The override runs the current interpreter directly, which works anywhere
+    # Python does, and exercises a real documented feature.
     impl = base / "_stub_impl.py"
-    win = os.name == "nt"
-    stub = base / ("hermes.cmd" if win else "hermes")
     log = base / "hermes_calls.log"
+    stub_cmd = f'{shlex.quote(sys.executable)} {shlex.quote(str(impl))}'
 
     def write_stub(reply: str):
         impl.write_text(
@@ -642,23 +647,13 @@ def test_gate_exit_code_end_to_end(base):
             f"pathlib.Path({str(log)!r}).write_text(' '.join(sys.argv[1:])[:200])\n"
             f"sys.stdout.write({reply!r})\n"
         )
-        if win:
-            stub.write_text(f'@echo off\r\n"{sys.executable}" "{impl}" %*\r\n')
-        else:
-            stub.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} "
-                            f"{shlex.quote(str(impl))} \"$@\"\n")
-            stub.chmod(0o755)
 
     def write_failing_stub(code: int):
         """A backend that exits non-zero without answering."""
-        if win:
-            stub.write_text(f"@echo off\r\nexit /b {code}\r\n")
-        else:
-            stub.write_text(f"#!/bin/sh\nexit {code}\n")
-            stub.chmod(0o755)
+        impl.write_text(f"import sys\nsys.exit({code})\n")
 
     env = dict(os.environ)
-    env["PATH"] = f"{base}{os.pathsep}" + env["PATH"]
+    env["DEVPAIR_HERMES_CMD"] = stub_cmd
     env["DEVPAIR_DRIVER_MODEL"] = "claude-opus-5"
     env["DEVPAIR_DRIVER_PROVIDER"] = "anthropic"
 
@@ -689,7 +684,7 @@ def test_gate_exit_code_end_to_end(base):
         # which is exactly how this test shipped broken on Windows. Say so once
         # and stop, rather than printing a wall of misleading results.
         check("gate assertions are meaningful (stub on PATH)", False,
-              f"stub {stub.name} was never executed — remaining checks skipped")
+              f"stub via DEVPAIR_HERMES_CMD was never executed — remaining checks skipped")
         return
     check("DO NOT USE + --gate -> exit 2", r.returncode == 2,
           f"got {r.returncode}: {r.stderr[-300:]}")
@@ -837,10 +832,11 @@ def test_hermes_binary_resolves_through_pathext():
         orig = os.environ.get("PATH", "")
         os.environ["PATH"] = f"{d}{os.pathsep}{orig}"
         try:
-            got = devpair._hermes_binary()
-            check("resolves the shim rather than the bare name", got != "hermes",
+            got = devpair._hermes_command()
+            check("returns a command list", isinstance(got, list) and len(got) == 1, f"got {got!r}")
+            check("resolves the shim rather than the bare name", got[0] != "hermes",
                   f"got {got!r} — a .cmd shim would be unreachable on Windows")
-            check("resolved path is the one we planted", Path(got).parent == d,
+            check("resolved path is the one we planted", Path(got[0]).parent == d,
                   f"got {got!r}")
         finally:
             os.environ["PATH"] = orig
@@ -851,9 +847,24 @@ def test_hermes_binary_resolves_through_pathext():
     os.environ["PATH"] = ""
     try:
         check("falls back to the bare name when absent",
-              devpair._hermes_binary() == "hermes", "would raise instead of soft-failing")
+              devpair._hermes_command() == ["hermes"], "would raise instead of soft-failing")
     finally:
         os.environ["PATH"] = orig
+
+    # DEVPAIR_HERMES_CMD takes a full prefix, for installs where Hermes is not a
+    # bare executable on PATH (venv launcher, container shim, wrapper script).
+    prev = os.environ.get("DEVPAIR_HERMES_CMD")
+    os.environ["DEVPAIR_HERMES_CMD"] = f"{sys.executable} /opt/hermes/cli.py"
+    try:
+        got = devpair._hermes_command()
+        check("override is split into a command prefix", len(got) == 2, f"got {got!r}")
+        check("override keeps the interpreter", got[0] == sys.executable, f"got {got!r}")
+        check("override keeps the script argument", got[1].endswith("cli.py"), f"got {got!r}")
+    finally:
+        if prev is None:
+            os.environ.pop("DEVPAIR_HERMES_CMD", None)
+        else:
+            os.environ["DEVPAIR_HERMES_CMD"] = prev
 
 
 def test_hermes_home_resolution_is_portable():
