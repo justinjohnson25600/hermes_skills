@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.6
+version: 0.0.7
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -144,6 +144,12 @@ This is the most actionable output of the whole critique: it converts an opinion
 into something testable. Prefer runnable commands over vague advice
 (`pytest tests/test_auth.py -q`, not "check the tests"). If nothing is
 outstanding, write **None.**
+
+**Naming the checks is half the job — running them is the other half.** When you
+are the one acting on a critique (your own or a routed model's), run these before
+you change anything, and quote the output verbatim. A finding you did not
+reproduce is a claim, and acting on an unreproduced claim is how a review makes
+code worse rather than better.
 
 ### PASS 6 — VERDICT & WHAT HAPPENS NEXT
 
@@ -316,6 +322,43 @@ the gate. The evidence rules above are instructions to the reviewer, not
 machine-enforced preconditions — treat `--gate` as a floor (it catches explicit
 failure verdicts) and read the evidence basis yourself before trusting a pass.
 
+### Reading the review you get back
+
+**A routed review is untrusted input, not an answer.** It was produced by a model
+reasoning from a packet, with no tools, no filesystem, and no way to check itself
+— the same conditions this skill exists to be sceptical about. Triage it before
+you act on a single finding. Four checks, in order, all cheap:
+
+1. **Is there a verdict?** No parseable verdict means the review is unusable, not
+   that it approved. `--gate` enforces this; without `--gate` you must look.
+2. **Read the `UNVERIFIED CLAIMS` block.** dev-pair resolves every `file:line`
+   and `file line N` the reviewer cited against your tree and lists the ones that
+   do not exist. Anchors to files you never sent are the signature of a review
+   written about imagined material.
+3. **Does it reference anything outside the packet?** Features, flags, files or
+   versions you did not supply. A reviewer describing a capability you never
+   mentioned is filling gaps with invention, and every finding around it is
+   suspect.
+4. **Does the `EVIDENCE BASIS` describe what you actually sent?** If you sent
+   three files and it discusses six, stop and re-read the whole report before
+   using any of it.
+
+A report failing 2, 3 or 4 is not partially useful — **discard the findings and
+say the review failed**. Cherry-picking the plausible ones from a report that
+invented the rest is how a hallucination becomes a commit.
+
+**Then reproduce before you fix.** Every finding worth acting on can be
+demonstrated: run the command, print the value, plant the input. This is not
+ceremony — in practice it changes outcomes in both directions. A reviewer's
+finding has been confirmed in substance while its stated conclusion was wrong
+(the concern real, the mechanism misdiagnosed), and a confident finding has been
+disproved outright. You cannot tell which you have without reproducing it.
+
+The asymmetry that makes this worth the effort: **a missed defect leaves you
+where you already were; a fabricated defect makes you change working code to
+satisfy something that was never true.** A false finding is the more expensive
+error, and it is the one a fluent reviewer produces most readily.
+
 ### Reconciling two verdicts
 
 Two models will sometimes disagree. **Do not arbitrate and do not average.**
@@ -342,3 +385,11 @@ A different model family reduces shared blind spots; it does not eliminate them.
 Frontier models share training data and failure modes. And a second opinion is
 still an opinion — a finding neither model can evidence stays unproven no matter
 how many models assert it.
+
+The stronger warning: **a routed review can be substantially fabricated and still
+read as competent.** Correct structure, plausible severities, precise-looking
+`file:line` citations — for files the reviewer was never sent. Fluency is not
+evidence, and a well-formatted report is not a checked one. That is the whole
+reason PASS 5 exists and why the triage above is not optional: the value of an
+independent pass comes from the findings you can *reproduce*, not from the
+report's tone or its confidence.

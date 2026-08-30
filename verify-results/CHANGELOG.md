@@ -2,6 +2,31 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 0.0.7 — 2026-08-30
+
+Written after a routed review came back substantially fabricated. The skill had
+detailed guidance on *sending* work out and on *reconciling two verdicts*, and
+nothing at all on reading the report in between — which is exactly where the
+failure landed.
+
+- **New: "Reading the review you get back".** A routed review is untrusted input,
+  not an answer. Four cheap triage checks — is there a verdict; what is in the
+  `UNVERIFIED CLAIMS` block; does it reference anything outside the packet; does
+  its evidence basis match what was sent. A report failing the last three is
+  discarded whole, because cherry-picking the plausible findings from a report
+  that invented the rest is how a hallucination becomes a commit.
+
+- **PASS 5 now says to RUN the checks, not just name them.** Naming them was
+  always half the job; the half that matters is reproducing a finding before
+  acting on it. Stated with the asymmetry that justifies the effort: a missed
+  defect leaves you where you were, a fabricated one makes you change working
+  code to satisfy something that was never true.
+
+- **The honest limit is blunter.** "A second opinion is still an opinion"
+  understated it. A routed review can be substantially fabricated and still read
+  as competent — correct structure, plausible severities, precise `file:line`
+  citations to files the reviewer never saw. Fluency is not evidence.
+
 ## 0.0.6 — 2026-08-30
 
 One instruction change, from a GPT-5.6 Luna review of the skill contract.

@@ -207,6 +207,29 @@ Four things to know before routing anything out:
   was not shown everything, but split large work into named slices rather than
   let that happen.
 
+### Triage the report before you act on it
+
+A routed review is untrusted input. It came from a model reasoning over a packet,
+with no tools and no way to check itself. Before using a single finding:
+
+- **Is there a verdict at all?** No parseable verdict means unusable, not
+  approved. `--gate` blocks this; without it, look.
+- **Read the `UNVERIFIED CLAIMS` block.** dev-pair resolves every `file:line` and
+  `file line N` the reviewer cited against your tree. Citations to files you
+  never sent mean the review is describing imagined material.
+- **Does it mention features, flags or versions you did not supply?** That is gap
+  filling, and the findings around it are suspect.
+- **Does its stated evidence basis match what you sent?**
+
+A report failing any of the last three is not partly useful — discard it and say
+the review failed. Picking the plausible findings out of a report that invented
+the rest is how a hallucination becomes a commit.
+
+Then **reproduce before you fix**. Run the PASS 5 checks; quote the output. A
+missed defect leaves you where you were, but a fabricated one makes you change
+working code to satisfy something that was never true — the more expensive error,
+and the one a fluent reviewer produces most easily.
+
 ### What `--gate` does and does not check
 
 `devpair verify --gate` exits **2** on `DO NOT USE` / `REVISE BEFORE USE`, on any
@@ -266,7 +289,7 @@ the PASS 5 commands yourself — that is the only fully independent path.
 
 ## Version & history
 
-Current: **0.0.6**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
+Current: **0.0.7**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
 published change.
 
 ## License
