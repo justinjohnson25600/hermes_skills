@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.18
+version: 1.1.19
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -284,6 +284,11 @@ a valid answer — the pair is instructed not to manufacture problems to look us
   (max 5 files, 8k chars each; binaries skipped).
 - **A missing `hermes` binary is a soft failure** — it falls through to the next
   backend instead of crashing.
+- **Output survives a legacy console.** stdout/stderr are reconfigured to UTF-8
+  at startup with `errors="replace"`. Without it a Windows console's cp1252
+  default raised `UnicodeEncodeError` on the banner *after* the reviewer had
+  answered and the ledger entry was written — the paid review was lost to a
+  traceback.
 - **The backend command is resolved, not assumed.** `hermes` is looked up through
   `PATHEXT` on Windows, so a `.cmd`/`.bat` shim works and not only a `.exe`. If
   Hermes lives somewhere PATH cannot reach, or behind a wrapper, set
@@ -300,7 +305,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 68 regression tests (351 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 70 regression tests (360 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, truncation
 maths, prompt-wide redaction, and the `--gate` exit codes (driven through the
@@ -310,7 +315,7 @@ required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 68 regression tests (351 checks)
+- `test_devpair.py` — 70 regression tests (360 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

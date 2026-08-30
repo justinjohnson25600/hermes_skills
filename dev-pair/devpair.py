@@ -1377,7 +1377,20 @@ def _hermes_command() -> list[str]:
     """
     override = os.environ.get("DEVPAIR_HERMES_CMD", "").strip()
     if override:
-        return shlex.split(override, posix=(os.name != "nt"))
+        # Neither shlex mode is correct on its own for a Windows path:
+        #   posix=True  treats "\\" as an escape, so C:\\Users\\x loses its separators;
+        #   posix=False keeps the quote characters INSIDE the token, so a quoted
+        #               path arrives as  'C:\\...\\python.exe'  and will not launch.
+        # Split with backslashes preserved, then strip one balanced pair of
+        # surrounding quotes per token. Both quoting styles then work on every
+        # platform, which is what a documented env var has to promise.
+        parts = []
+        for tok in shlex.split(override, posix=False):
+            if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+                tok = tok[1:-1]
+            if tok:
+                parts.append(tok)
+        return parts or [shutil.which("hermes") or "hermes"]
     return [shutil.which("hermes") or "hermes"]
 
 
@@ -1733,7 +1746,27 @@ def cmd_prune(args) -> int:
     return 0
 
 
+def _force_utf8_output() -> None:
+    """Make stdout/stderr UTF-8 wherever Python let the console choose.
+
+    Windows consoles default to a legacy code page (cp1252 here), which cannot
+    encode the box-drawing characters used in every banner. The failure mode was
+    the worst kind: the reviewer answered, the paid call was already spent and
+    ledgered, and THEN devpair died with a UnicodeEncodeError while printing the
+    result — so the user paid for a review they never saw. Replacing unencodable
+    characters is strictly better than losing the report.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            # Python < 3.7, or a stream that is not a TextIOWrapper (pytest
+            # capture, a pipe wrapper). Never fatal: this is cosmetic.
+            pass
+
+
 def main() -> int:
+    _force_utf8_output()
     # Apply this machine's roster BEFORE argparse reads REVIEWERS for --reviewer
     # choices, or a locally-declared reviewer would be rejected as unknown.
     _load_roster()

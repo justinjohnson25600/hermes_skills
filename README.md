@@ -8,7 +8,7 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 
 | Skill | Version | What it does |
 |---|---|---|
-| [dev-pair](dev-pair/) | 1.1.18 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
+| [dev-pair](dev-pair/) | 1.1.19 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
 | [verify-results](verify-results/) | 0.0.5 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
 ## Contributing / releasing
@@ -52,6 +52,24 @@ Set `enabled: false` with a `blocked_reason` for a machine that is known but not
 yet reachable; `--list` prints the reason so it stays visible instead of being
 quietly forgotten. Two boxes sit in that state today — `jj-hp-prodesk` and
 `jack-laptop` — both waiting on the mac's public key being authorised.
+
+### Before you publish a code change: run it on another platform
+
+Three releases in a row shipped a test that passed on macOS and failed on every
+Windows agent. `deploy.py`'s check-count guard caught each one *after* the push.
+Staging to one non-origin box first turns that into a pre-publish check:
+
+```bash
+# copy the working tree to an agent and run its suite there, before committing
+python3 contribute.py --scan            # confirm you know what differs first
+ssh <agent> "python %LOCALAPPDATA%\\hermes\\devpair\\test_devpair.py"
+```
+
+A **lower check count** on the remote is the signal, not the "0 failed" line —
+it means assertions are being skipped, and a skipped assertion is silent. Three
+real bugs hid behind that: a stub written in the locale encoding, an env-var
+parsed with the wrong shlex mode, and a console encoding that killed the process
+*after* the paid API call had been made.
 
 ### Editing a skill on another machine
 

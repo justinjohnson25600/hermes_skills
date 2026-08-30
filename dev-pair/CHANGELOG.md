@@ -2,6 +2,34 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.19 — 2026-08-30
+
+Everything below was found by staging to a Windows agent and running the suite
+THERE before publishing — the step whose absence let 1.1.16 and 1.1.17 ship
+broken. Verified 360/360 on macOS and Windows.
+
+- **devpair crashed on a legacy console, after spending the money.** Every
+  banner uses box-drawing characters; a Windows console defaults to cp1252,
+  which cannot encode them. The reviewer answered, the paid call was ledgered,
+  and *then* `UnicodeEncodeError` killed the process while printing the result.
+  The worst possible ordering: charged, and no report. stdout/stderr are now
+  reconfigured to UTF-8 with `errors="replace"` at startup.
+
+- **`DEVPAIR_HERMES_CMD` mis-parsed real Windows paths.** Neither shlex mode is
+  correct alone: `posix=True` eats backslashes as escapes, `posix=False` leaves
+  quote characters inside the token. Now split with backslashes preserved, then
+  one balanced quote pair stripped per token, so both quoting styles work
+  everywhere. Pinned by a test that round-trips `sys.executable` under single
+  quotes, double quotes, and bare.
+
+- **The gate test wrote its own stub in the locale encoding.** `write_text()`
+  without `encoding=` is cp1252 on those boxes, so a reply containing an em-dash
+  produced a stub Python refused to parse. The stub never ran and every gate
+  assertion failed — the exact symptom, three releases running, that looked like
+  a devpair bug and was not.
+
+Tests: 68 → 70 (351 → 360 checks).
+
 ## 1.1.18 — 2026-08-30
 
 The 1.1.17 fix was right about the cause and incomplete about the remedy; the

@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -639,18 +640,26 @@ def test_gate_exit_code_end_to_end(base):
     # Python does, and exercises a real documented feature.
     impl = base / "_stub_impl.py"
     log = base / "hermes_calls.log"
-    stub_cmd = f'{shlex.quote(sys.executable)} {shlex.quote(str(impl))}'
+    # Double quotes: the style the docs show, and the one that survives Windows
+    # paths. shlex.quote() would emit POSIX single quotes here and hide a bug.
+    stub_cmd = f'"{sys.executable}" "{impl}"'
 
     def write_stub(reply: str):
+        # encoding="utf-8" is load-bearing: Path.write_text() uses the locale
+        # encoding, which is cp1252 on the Windows agents. A reply containing an
+        # em-dash was then written as a cp1252 byte, and Python refused to
+        # import its own stub ("Non-UTF-8 code ... no encoding declared"). The
+        # stub silently never ran and every gate assertion failed.
         impl.write_text(
             "import sys, pathlib\n"
-            f"pathlib.Path({str(log)!r}).write_text(' '.join(sys.argv[1:])[:200])\n"
-            f"sys.stdout.write({reply!r})\n"
+            f"pathlib.Path({str(log)!r}).write_text(' '.join(sys.argv[1:])[:200], encoding='utf-8')\n"
+            f"sys.stdout.write({reply!r})\n",
+            encoding="utf-8",
         )
 
     def write_failing_stub(code: int):
         """A backend that exits non-zero without answering."""
-        impl.write_text(f"import sys\nsys.exit({code})\n")
+        impl.write_text(f"import sys\nsys.exit({code})\n", encoding="utf-8")
 
     env = dict(os.environ)
     env["DEVPAIR_HERMES_CMD"] = stub_cmd
@@ -660,7 +669,7 @@ def test_gate_exit_code_end_to_end(base):
     def run(reply, *extra):
         write_stub(reply)
         ev = base / "evidence.txt"
-        ev.write_text("def add(a, b):\n    return a + b\n")
+        ev.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
         return subprocess.run(
             [sys.executable, str(Path(devpair.__file__)), "verify",
              "--with", "kimi-coding/kimi-k3", "--files", str(ev),
@@ -677,7 +686,8 @@ def test_gate_exit_code_end_to_end(base):
             "[CRITICAL] it will delete the database")
 
     r = run(bad, "--gate")
-    check("stub reviewer was actually invoked", log.exists(), "backend never called")
+    check("stub reviewer was actually invoked", log.exists(),
+          f"backend never called — rc={r.returncode} stderr={(r.stderr or '')[-400:]!r}")
     if not log.exists():
         # Everything below assumes the stub answered. Without that, each case is
         # a backend failure and the whole test degrades into vacuous passes —
@@ -721,7 +731,7 @@ def test_gate_exit_code_end_to_end(base):
     # this assertion passes vacuously.
     write_failing_stub(3)
     ev = base / "evidence.txt"
-    ev.write_text("x = 1\n")
+    ev.write_text("x = 1\n", encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(Path(devpair.__file__)), "verify",
          "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--gate"],
@@ -815,6 +825,34 @@ def test_prune_respects_age_and_active_session(base):
           "deleted the session the user is mid-conversation with")
 
 
+def test_banner_survives_a_legacy_console_encoding():
+    print("\n[portable] a cp1252 console must not destroy a review that was paid for")
+    # Found on the Windows agents: every banner uses box-drawing characters, a
+    # Windows console defaults to a legacy code page, and printing the result
+    # raised UnicodeEncodeError *after* the reviewer had answered and the ledger
+    # entry was written. The user paid for a review and received a traceback.
+    with tempfile.TemporaryDirectory() as td:
+        script = Path(td) / "emit.py"
+        # cp1252 cannot represent U+2500; the guard must downgrade, not die.
+        script.write_text(
+            "import sys, pathlib\n"
+            f"sys.path.insert(0, {str(Path(devpair.__file__).parent)!r})\n"
+            "import devpair\n"
+            "devpair._force_utf8_output()\n"
+            "print('\\u2500' * 20)\n"
+            "print('done')\n"
+        )
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        p = subprocess.run([sys.executable, str(script)], capture_output=True,
+                           text=True, env=env, timeout=60)
+        check("printing a box-drawn banner under cp1252 does not crash",
+              p.returncode == 0, f"rc={p.returncode}: {(p.stderr or '')[-200:]}")
+        check("output still arrives", "done" in (p.stdout or ""),
+              f"stdout={(p.stdout or '')[:120]!r}")
+        check("no UnicodeEncodeError", "UnicodeEncodeError" not in (p.stderr or ""),
+              (p.stderr or "")[-200:])
+
+
 # --- PORTABILITY: the tool must find the right home on any machine ----------
 def test_hermes_binary_resolves_through_pathext():
     print("\n[portable] a .cmd/.bat shim on PATH is found, not just hermes.exe")
@@ -860,6 +898,34 @@ def test_hermes_binary_resolves_through_pathext():
         check("override is split into a command prefix", len(got) == 2, f"got {got!r}")
         check("override keeps the interpreter", got[0] == sys.executable, f"got {got!r}")
         check("override keeps the script argument", got[1].endswith("cli.py"), f"got {got!r}")
+
+        # The bug that cost two releases: shlex.quote writes POSIX single quotes,
+        # and shlex.split(posix=False) leaves them INSIDE the token, so a quoted
+        # Windows path arrived as "'C:\\...\\python.exe'" and would not launch.
+        # A quoted path must round-trip to the bare path on every platform.
+        # Both quoting styles must round-trip to the bare path, on every
+        # platform. This is the check that caught two bad releases: a Windows
+        # path is full of backslashes (POSIX shlex eats them as escapes) and may
+        # be quoted (non-POSIX shlex keeps the quotes inside the token).
+        for style, q in (("single", "'"), ("double", '"')):
+            os.environ["DEVPAIR_HERMES_CMD"] = f"{q}{sys.executable}{q} {q}/opt/a b/cli.py{q}"
+            got = devpair._hermes_command()
+            check(f"{style}-quoted interpreter path round-trips exactly",
+                  got and got[0] == sys.executable,
+                  f"got {got!r} — must equal {sys.executable!r}")
+            check(f"{style}-quoted path with a space stays one token",
+                  len(got) == 2 and got[1] == "/opt/a b/cli.py", f"got {got!r}")
+        # Unquoted, with native separators, must survive too.
+        os.environ["DEVPAIR_HERMES_CMD"] = sys.executable
+        check("an unquoted native path survives intact",
+              devpair._hermes_command() == [sys.executable],
+              f"got {devpair._hermes_command()!r}")
+
+        # An override of only whitespace must not produce an empty command list.
+        os.environ["DEVPAIR_HERMES_CMD"] = "   "
+        check("a blank override falls back rather than emptying the command",
+              devpair._hermes_command() == [shutil.which("hermes") or "hermes"],
+              f"got {devpair._hermes_command()!r}")
     finally:
         if prev is None:
             os.environ.pop("DEVPAIR_HERMES_CMD", None)
@@ -1804,6 +1870,7 @@ def main():
         test_budget_caps_total_walltime,
         test_token_estimates_recorded,
         test_prune_respects_age_and_active_session,
+        test_banner_survives_a_legacy_console_encoding,
         test_hermes_binary_resolves_through_pathext,
         test_hermes_home_resolution_is_portable,
         test_roster_is_machine_local,
