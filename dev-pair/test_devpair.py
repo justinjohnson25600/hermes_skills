@@ -1437,15 +1437,32 @@ def test_verdict_regex_tolerates_real_model_formatting(base):
 
 
 def _canonical_skill_path():
-    """Locate verify-results/SKILL.md — repo sibling first, then the install."""
+    """Locate verify-results/SKILL.md — repo sibling, then this machine's Hermes
+    home. HERMES_HOME/LOCALAPPDATA must be honoured: hardcoding ~/.hermes made
+    the pin silently degrade to its weak fallback on every Windows install."""
     import pathlib
     here = pathlib.Path(__file__).resolve().parent
-    for c in (here.parent / "verify-results" / "SKILL.md",
-              pathlib.Path.home() / ".hermes/skills/productivity/verify-results/SKILL.md"):
+    homes = []
+    env = os.environ.get("HERMES_HOME")
+    if env:
+        homes.append(pathlib.Path(env))
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        homes.append(pathlib.Path(local) / "hermes")
+    homes.append(pathlib.Path.home() / ".hermes")
+    # devpair.py lives in <home>/devpair/, so its parent IS the home when installed
+    homes.append(pathlib.Path(devpair.__file__).resolve().parent.parent)
+
+    cands = [here.parent / "verify-results" / "SKILL.md"]
+    for h in homes:
+        cands.append(h / "skills" / "productivity" / "verify-results" / "SKILL.md")
+    for c in cands:
         if c.is_file():
             return c
-    for c in (pathlib.Path.home() / ".hermes/skills").rglob("verify-results/SKILL.md"):
-        return c
+    for h in homes:
+        if (h / "skills").is_dir():
+            for c in (h / "skills").rglob("verify-results/SKILL.md"):
+                return c
     return None
 
 

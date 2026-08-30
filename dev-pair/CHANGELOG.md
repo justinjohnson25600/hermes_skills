@@ -2,6 +2,19 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.14 — 2026-08-30
+
+Found by deploying to three Windows boxes and refusing to accept a green number.
+
+- **The drift pin silently degraded to its weak fallback on every install.**
+  `_canonical_skill_path()` looked only in a hardcoded `~/.hermes`, so on any
+  Windows box — where the home is `%LOCALAPPDATA%\hermes` — it never found the
+  skill sitting right next to it and fell through to "canonical SKILL.md not
+  found, template shape checked alone". The estate reported 288 checks against
+  305 on the mac: 17 checks were skipped, and the one guarding the two-copy
+  contract was among them. It now honours `HERMES_HOME`, `LOCALAPPDATA`, and
+  derives the home from devpair.py's own location.
+
 ## 1.1.13 — 2026-08-29
 
 Documentation catch-up. 1.1.12 added the `verify` mode to the CLI and the SKILL,
