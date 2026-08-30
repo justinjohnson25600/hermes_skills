@@ -8,7 +8,7 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 
 | Skill | Version | What it does |
 |---|---|---|
-| [dev-pair](dev-pair/) | 1.1.12 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
+| [dev-pair](dev-pair/) | 1.1.13 | Second-opinion code review / critique from a *different* LLM than the one doing the work — supervisory pair-programming across model families. **User-invoked only** (ledger + daily cap enforce it); you choose the reviewing model |
 
 ## Contributing / releasing
 
@@ -26,7 +26,7 @@ test count the suite does not report, when `platforms:` omits a platform the
 code actually supports, when `skills.json` is stale, or when the copy installed
 under your Hermes home has drifted from the repo. It also refuses to let you
 reason about the remote from a stale ref — it fetches first.
-| [verify-results](verify-results/) | 0.0.2 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
+| [verify-results](verify-results/) | 0.0.3 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
 ## Installing a skill
 

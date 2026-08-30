@@ -116,6 +116,26 @@ def check_versions(skill: str, fix: bool) -> str | None:
             found["repo-root table"] = (m.group(1), root_readme,
                                         f"| [{skill}]({skill}/) | {m.group(1)} |")
 
+    # Docs that COUNT things the code defines: a mode added to the CLI while the
+    # README still says "five modes" is exactly the drift that shipped in 1.1.12.
+    src_f = d / f"{skill.replace('-', '')}.py"
+    if not src_f.is_file():
+        src_f = d / "devpair.py"
+    if src_f.is_file():
+        src = src_f.read_text(encoding="utf-8")
+        m = re.search(r"for mode in \(([^)]*)\)", src)
+        if m:
+            n = len(re.findall(r'"[a-z]+"', m.group(1)))
+            words = {5: "five", 6: "six", 7: "seven", 8: "eight"}
+            for doc in ("SKILL.md", "README.md"):
+                f = d / doc
+                if not f.is_file():
+                    continue
+                for claim in re.findall(r"[Tt]he (\w+) modes", f.read_text(encoding="utf-8")):
+                    if claim.lower() != words.get(n, ""):
+                        fail(f"[{skill}] {doc} says \"the {claim} modes\" but the CLI "
+                             f"defines {n} ({words.get(n, n)})")
+
     cl = d / "CHANGELOG.md"
     if cl.is_file():
         heads = re.findall(r"^##\s*(\d+\.\d+\.\d+)", cl.read_text(encoding="utf-8"), re.M)

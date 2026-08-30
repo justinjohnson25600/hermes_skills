@@ -58,6 +58,16 @@ verify with both
 `using both` runs inline *and* independently, then reconciles — by running the
 `PASS 5` checks and letting the evidence decide, not by averaging opinions.
 
+Be aware of what that is and is not: **`using both` is a manual procedure, not an
+orchestrator.** Nothing runs the two passes and merges them for you, and nothing
+enforces the reconciliation steps — if the settling checks are not going to be
+run, ask for `using <model>` and read the two reports separately rather than
+claiming a reconciliation that did not happen.
+
+Similarly, `--gate` reads the verdict and the severity labels. It cannot tell
+whether the stated evidence basis is honest, or whether an `APPROVE` was issued on
+a partial view. Treat it as a floor, not an assurance.
+
 Honest limit: a different model family reduces shared blind spots, it does not
 eliminate them, and a finding neither model can evidence stays unproven.
 
@@ -66,12 +76,13 @@ eliminate them, and a finding neither model can evidence stays unproven.
 Markdown-only; no code, no dependencies. Copy `SKILL.md` to
 `<hermes-home>/skills/<category>/verify-results/SKILL.md`.
 
-The model-routing appendix additionally requires `dev-pair`. Without it the skill
+The model-routing appendix additionally requires `dev-pair` **v1.1.12 or later**
+(earlier versions have no `verify` subcommand). Without it the skill
 runs inline and says so rather than silently ignoring your model choice.
 
 ## Version
 
-Current: **0.0.2**. See [CHANGELOG.md](CHANGELOG.md).
+Current: **0.0.3**. See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

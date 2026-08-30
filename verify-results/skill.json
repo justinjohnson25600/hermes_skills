@@ -1,6 +1,6 @@
 {
   "name": "verify-results",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "category": "productivity",
   "description": "Structured post-hoc critique of finished work \u2014 code, documents, or answers.",
   "files": [

@@ -2,6 +2,35 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 0.0.3 — 2026-08-29
+
+README catch-up: 0.0.2 added the honesty caveats to SKILL.md but left the
+operator-facing README implying more than the tool delivers.
+
+- README now states that `using both` is a manual procedure with no orchestrator
+  and no enforcement, and that `--gate` cannot judge whether an evidence basis is
+  honest — a floor, not an assurance.
+- Minimum dev-pair version (v1.1.12+) stated in the install section.
+
+ 2026-08-29
+
+Reviewed by GPT-5.6 Luna via `devpair review`.
+
+- **`using both` is now labelled a manual procedure, not an orchestrator.** No
+  tool runs the two passes and merges them; the reconciliation steps are yours to
+  perform and nothing enforces them. Advertising it as a mode without saying so
+  invited exactly the failure the section warns about — claiming evidence settled
+  a dispute nobody ran.
+- **`--gate`'s limits are now stated.** It reads the verdict and severity labels;
+  it cannot tell whether the evidence basis is honest or whether an `APPROVE` was
+  issued on a partial view. A reviewer that omits the basis entirely still passes.
+  Treat it as a floor, not an assurance.
+- Minimum dev-pair version pinned (v1.1.12+) — earlier builds have no `verify`
+  subcommand, so the appendix would die at argparse.
+- **Published** to the public hermes_skills repo with `skill.json` and an entry
+  in `skills.json`; it previously existed only under `~/.hermes`, so a fresh
+  install could not obtain the skill dev-pair's `verify` mode implements.
+
 ## 0.0.2 — 2026-08-29
 
 Reviewed by GPT-5.6 Luna via `devpair review`.

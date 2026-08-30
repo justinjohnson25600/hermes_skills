@@ -2,6 +2,40 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.13 — 2026-08-29
+
+Documentation catch-up. 1.1.12 added the `verify` mode to the CLI and the SKILL,
+but the README was never updated: it still said "the five modes" and its
+chat-phrase table had no `verify` row, so the operator-facing doc did not admit
+the mode existed.
+
+- README documents `verify` — what it is for, how it differs from `review`, the
+  four verdicts, and that its template is pinned to the canonical verify-results
+  skill.
+- `check_consistency.py` now cross-checks any "the N modes" claim in SKILL.md or
+  README.md against the mode tuple in the source, so a mode added without a doc
+  update fails the gate. Verified by reverting the README and watching it fail.
+
+ 2026-08-29
+
+Reviewed by GPT-5.6 Luna (verdict: NEEDS WORK). It ran live probes rather than
+reading, and was right on every material point.
+
+- **BLOCKER, self-inflicted in 1.1.11: the verdict parser could not read the
+  heading the template mandates.** `## PASS 6 — VERDICT & WHAT HAPPENS NEXT`
+  parsed as `None`, so every verify run stored no verdict and `--gate` failed
+  closed on a clean `APPROVE`. Found while checking one of Luna's claims, not
+  reported by it. The regex now accepts trailing words in the heading.
+- **The 1.1.11 drift pin was theatre.** It compared `SHAPES["verify"]` against
+  hardcoded strings and never opened verify-results/SKILL.md — editing the
+  canonical skill passed green. It now loads the real file (repo sibling, then
+  the install), compares pass numbering and titles, checks the normative clauses
+  exist on both sides, and asserts every verdict the skill defines is one the
+  gate can parse. Verified by Luna's own falsification: renaming PASS 5 in the
+  skill alone now fails.
+- Stale "five passes" comments corrected in the source and CLI epilog.
+- Tests 63 → 64 (305 checks).
+
 ## 1.1.12 — 2026-08-29
 
 Reviewed by GPT-5.6 Luna (verdict: NEEDS WORK). It ran live probes rather than

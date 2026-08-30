@@ -145,6 +145,7 @@ get glm to critique the plan
 | "check this plan first" | `devpair critique --plan ... --driver <live>` |
 | "dev-pair this bug" | `devpair debug --error ... --files ... --driver <live>` |
 | "tell the pair I fixed 1 and 3" | `devpair followup --ask "..." --driver <live>` |
+| "verify this before I ship it" | `devpair verify --files ... --driver <live>` |
 | "which reviewers work?" | `devpair doctor --driver <live>` |
 
 If you don't name a model, the tool picks the first reviewer that is a
@@ -263,7 +264,7 @@ passed. A Hermes agent knows its own model and the skill requires it to pass
 it, so **in chat you never type this**. It matters only when you drive the CLI
 by hand.
 
-### The five modes
+### The six modes
 
 **`critique`** — before building. Pressure-test the plan while changing it is still cheap:
 
@@ -297,6 +298,23 @@ devpair alt --ask "cron job or long-running daemon for this watcher?" --driver k
 ```bash
 devpair followup --ask "Fixed 1 and 3 by X. Disagree with 2 because Y." --driver kimi-coding/kimi-k3
 ```
+
+**`verify`** — after building, before it is used. A six-pass post-hoc critique
+implementing the [verify-results](../verify-results/) skill: errors, hallucination
+check, gaps, improvements, the checks that would settle the findings, and a verdict
+of `APPROVE` / `APPROVE WITH MINOR EDITS` / `REVISE BEFORE USE` / `DO NOT USE`. It
+opens by stating what evidence it actually had, and caps its own verdict when it
+only saw part of the work.
+
+```bash
+devpair verify --files report.md --driver <live> --requested-by user
+devpair verify --diff --gate --driver <live> --requested-by user
+```
+
+Where `review` is a peer reading your diff, `verify` is a gate in front of a
+finished artefact — use it for anything about to be shipped, sent, or relied upon.
+The template is pinned to the canonical skill by a regression test, so the routed
+reviewer and an inline run are held to the same contract.
 
 ### What you get back
 
@@ -422,7 +440,7 @@ The suite pins every defect found during the tool's own development: self-review
 
 ## Version & history
 
-Current: **1.1.12**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.1.13**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 
