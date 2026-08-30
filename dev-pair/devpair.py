@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -1356,9 +1357,22 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text or "") // 4)
 
 
+def _hermes_binary() -> str:
+    """Resolve the `hermes` executable, honouring PATHEXT on Windows.
+
+    A bare "hermes" in a subprocess list goes to CreateProcess, which only ever
+    appends `.exe` — so a `.cmd`/`.bat` shim on PATH is invisible, even though
+    every other Windows tool would find it. That matters because this skill's own
+    manual-install instructions tell people to put a shim on PATH. shutil.which
+    walks PATHEXT properly. Falls back to the bare name so a missing binary still
+    produces the existing soft failure rather than a new one here.
+    """
+    return shutil.which("hermes") or "hermes"
+
+
 def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tuple[bool, str]:
     cmd = [
-        "hermes", "-z", prompt,
+        _hermes_binary(), "-z", prompt,
         "-m", reviewer["model"],
         "--provider", reviewer["provider"],
         "-t", "",

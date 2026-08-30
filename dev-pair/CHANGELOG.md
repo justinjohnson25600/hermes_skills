@@ -2,6 +2,24 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.17 — 2026-08-30
+
+A real Windows defect, surfaced by fixing the test that was hiding it.
+
+- **devpair could not invoke a `.cmd`/`.bat` shim on Windows.** `run_reviewer`
+  passed a bare `"hermes"` to `subprocess.run`, which on Windows reaches
+  CreateProcess — and CreateProcess only ever appends `.exe`. It never consults
+  `PATHEXT`. So the shim that this skill's own manual-install section tells you
+  to put on PATH was invisible to it: every review would soft-fail with "no
+  reviewer backend answered" on any box where `hermes` is a shim rather than an
+  `.exe`. The estate boxes happen to ship `hermes.exe`, which is why it went
+  unnoticed. Now resolved through `shutil.which`, which walks `PATHEXT`, falling
+  back to the bare name so a genuinely missing binary still soft-fails as before.
+  `shutil` was also not imported — the first fix would have been a NameError on
+  every review.
+
+Tests: 66 → 67 (344 → 347 checks).
+
 ## 1.1.16 — 2026-08-30
 
 Found by deploying 1.1.15 to the fleet and reading the check COUNT, not the

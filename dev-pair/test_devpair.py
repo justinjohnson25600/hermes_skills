@@ -821,6 +821,41 @@ def test_prune_respects_age_and_active_session(base):
 
 
 # --- PORTABILITY: the tool must find the right home on any machine ----------
+def test_hermes_binary_resolves_through_pathext():
+    print("\n[portable] a .cmd/.bat shim on PATH is found, not just hermes.exe")
+    # Found by deploying to Windows: a bare "hermes" in a subprocess list goes to
+    # CreateProcess, which only appends .exe — so the shim the manual-install
+    # instructions tell people to create was invisible. shutil.which walks
+    # PATHEXT properly.
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        ext = ".cmd" if os.name == "nt" else ""
+        shim = d / f"hermes{ext}"
+        shim.write_text("@echo off\r\nexit /b 0\r\n" if os.name == "nt" else "#!/bin/sh\nexit 0\n")
+        if os.name != "nt":
+            shim.chmod(0o755)
+        orig = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{d}{os.pathsep}{orig}"
+        try:
+            got = devpair._hermes_binary()
+            check("resolves the shim rather than the bare name", got != "hermes",
+                  f"got {got!r} — a .cmd shim would be unreachable on Windows")
+            check("resolved path is the one we planted", Path(got).parent == d,
+                  f"got {got!r}")
+        finally:
+            os.environ["PATH"] = orig
+
+    # With nothing on PATH it must fall back to the bare name, so the existing
+    # soft-failure path still handles a missing binary.
+    orig = os.environ.get("PATH", "")
+    os.environ["PATH"] = ""
+    try:
+        check("falls back to the bare name when absent",
+              devpair._hermes_binary() == "hermes", "would raise instead of soft-failing")
+    finally:
+        os.environ["PATH"] = orig
+
+
 def test_hermes_home_resolution_is_portable():
     print("\n[portable] state lands in THIS machine's hermes home, not a guess")
     import importlib
@@ -1758,6 +1793,7 @@ def main():
         test_budget_caps_total_walltime,
         test_token_estimates_recorded,
         test_prune_respects_age_and_active_session,
+        test_hermes_binary_resolves_through_pathext,
         test_hermes_home_resolution_is_portable,
         test_roster_is_machine_local,
         test_roster_ignores_empty_or_broken_config,

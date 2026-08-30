@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.16
+version: 1.1.17
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -294,7 +294,7 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 66 regression tests (344 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 67 regression tests (347 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, truncation
 maths, prompt-wide redaction, and the `--gate` exit codes (driven through the
@@ -304,7 +304,7 @@ required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 66 regression tests (344 checks)
+- `test_devpair.py` — 67 regression tests (347 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
