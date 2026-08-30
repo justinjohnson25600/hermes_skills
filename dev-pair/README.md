@@ -377,10 +377,12 @@ echo $?     # 0 = pass, 2 = gate failed, 1 = no backend answered
 |---|---|
 | `0` | Verdict was SHIP / SHIP AFTER FIXES / PROCEED / PROCEED WITH CHANGES, no blockers |
 | `1` | No reviewer backend answered (infrastructure failure) |
-| `2` | Gate failed: verdict was DO NOT SHIP / NEEDS WORK / STOP / RECONSIDER, **or** a `[BLOCKER]` was found under an otherwise-passing verdict, **or** the verdict could not be parsed |
+| `2` | Gate failed: verdict was DO NOT SHIP / NEEDS WORK / STOP / RECONSIDER, **or** a `[BLOCKER]` was found under an otherwise-passing verdict, **or** the verdict could not be parsed, **or** the review gave two different verdicts |
 
-That last case is deliberate: a gate that cannot read the answer must not report
-success. Recommended shape for CI — gate on the mechanical tier (tests, lint,
+Those last two are deliberate: a gate that cannot read the answer — or cannot
+tell which of two contradictory verdicts was meant — must not report success. A
+verdict restated identically is not a conflict, so a model that summarises its
+own conclusion at the end does not trip it. Recommended shape for CI — gate on the mechanical tier (tests, lint,
 "the reviewer ran at all"), keep the LLM's judgement advisory until you have
 measured its precision on your own codebase.
 

@@ -299,8 +299,11 @@ devpair verify --with <provider>/<model> \
   independent.
 
 `devpair verify` returns the same passes and labels. With `--gate` it exits 2 on
-`DO NOT USE` / `REVISE BEFORE USE`, on any `[CRITICAL]` finding, and on a verdict
-it cannot parse — it fails closed, so an unreadable answer is never a pass.
+`DO NOT USE` / `REVISE BEFORE USE`, on any `[CRITICAL]` finding, on a verdict it
+cannot parse, and on a review carrying two *different* verdicts (an `APPROVE`
+followed by a `DO NOT USE`, or an example verdict quoted before the real one) —
+it fails closed, so an answer it cannot read, or cannot pick between, is never a
+pass.
 
 **What `--gate` does not check.** It reads the verdict and the severity labels;
 it cannot tell whether the `EVIDENCE BASIS` line is honest, whether the reviewer

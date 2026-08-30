@@ -64,9 +64,11 @@ enforces the reconciliation steps — if the settling checks are not going to be
 run, ask for `using <model>` and read the two reports separately rather than
 claiming a reconciliation that did not happen.
 
-Similarly, `--gate` reads the verdict and the severity labels. It cannot tell
-whether the stated evidence basis is honest, or whether an `APPROVE` was issued on
-a partial view. Treat it as a floor, not an assurance.
+Similarly, `--gate` reads the verdict and the severity labels — it blocks on a
+failing verdict, a `[CRITICAL]` finding, an unparseable verdict, or two different
+verdicts in one review. What it cannot tell is whether the stated evidence basis
+is honest, or whether an `APPROVE` was issued on a partial view. Treat it as a
+floor, not an assurance.
 
 Two practical limits worth knowing before you route anything out. The tool
 **clips oversized evidence** — roughly 24k characters per file, 60k for a diff,

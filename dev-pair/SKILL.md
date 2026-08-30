@@ -161,7 +161,9 @@ devpair prune --days 30   # delete old sessions (never the active one)
 ```
 
 Gating: add `--gate` to exit **2** on DO NOT SHIP / NEEDS WORK / STOP /
-RECONSIDER, on any `[BLOCKER]`, or on an unparseable verdict (fails closed).
+RECONSIDER, on any `[BLOCKER]`, on an unparseable verdict, or on two *different*
+verdicts in one review (all fail closed — an answer the gate cannot read, or
+cannot pick between, is never a pass).
 Default is advisory (always exit 0). `--budget N` caps total wall-clock across
 all backend attempts. Both are opt-in and safe to add to CI.
 
