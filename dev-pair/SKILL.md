@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.19
+version: 1.1.20
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -139,8 +139,15 @@ would be sent, and costs nothing.
 
 ## Commands
 
+**The examples below are abbreviated syntax** — they show each mode's own flags.
+Every real paid call must also carry `--driver PROVIDER/MODEL` and, when the user
+asked for it, `--requested-by user` (see The One Rule and Accountability). Only
+the first example is written out in full:
+
 ```bash
-devpair critique --plan PLAN.md --ask "worth building this way?"
+devpair critique --plan PLAN.md --ask "worth building this way?" \
+                 --driver <live-provider>/<live-model> --requested-by user
+
 devpair review   --diff                      # uncommitted + untracked
 devpair review   --diff-ref main --focus "error paths, cleanup"
 devpair review   --files src/auth.py src/session.py
@@ -160,10 +167,25 @@ devpair doctor         # check reviewer backends (probed in parallel)
 devpair prune --days 30   # delete old sessions (never the active one)
 ```
 
-Gating: add `--gate` to exit **2** on DO NOT SHIP / NEEDS WORK / STOP /
-RECONSIDER, on any `[BLOCKER]`, on an unparseable verdict, or on two *different*
-verdicts in one review (all fail closed — an answer the gate cannot read, or
-cannot pick between, is never a pass).
+Gating: add `--gate` to exit **2** on a failing verdict, on a highest-severity
+finding, on an unparseable verdict, or on two *different* verdicts in one review
+(all fail closed — an answer the gate cannot read, or cannot pick between, is
+never a pass). The vocabulary differs by mode and the gate accepts **both**:
+
+| Mode | Failing verdicts | Blocking severity |
+|---|---|---|
+| `critique` / `alt` / `followup` | RECONSIDER, STOP | `[BLOCKER]` |
+| `review` | DO NOT SHIP, NEEDS WORK | `[BLOCKER]` |
+| `verify` | DO NOT USE, REVISE BEFORE USE | `[CRITICAL]` |
+| `debug` | *(emits no verdict)* | `[BLOCKER]` |
+
+All six modes are covered. **`debug` has no verdict line at all**, so
+`debug --gate` always fails closed — that is the unparseable-verdict rule, not a
+bug, but it makes `--gate` the wrong tool for a debugging session.
+
+`verify` mirrors verify-results and emits `[CRITICAL]` where every other mode
+emits `[BLOCKER]`; the gate counts either, so a verify report full of
+`[CRITICAL]` findings cannot pass under an `APPROVE`.
 Default is advisory (always exit 0). `--budget N` caps total wall-clock across
 all backend attempts. Both are opt-in and safe to add to CI.
 
@@ -292,20 +314,40 @@ a valid answer — the pair is instructed not to manufacture problems to look us
 - **The backend command is resolved, not assumed.** `hermes` is looked up through
   `PATHEXT` on Windows, so a `.cmd`/`.bat` shim works and not only a `.exe`. If
   Hermes lives somewhere PATH cannot reach, or behind a wrapper, set
-  `DEVPAIR_HERMES_CMD` to a full command prefix
-  (`DEVPAIR_HERMES_CMD="/usr/bin/python3 /opt/hermes/cli.py"`) and the reviewer
-  arguments are appended to it.
+  `DEVPAIR_HERMES_CMD` to a command prefix; the reviewer arguments are appended
+  to it.
 
-- **The pair's `file:line` claims are auto-verified.** Anchors that name a
-  missing file or a line past EOF are listed under `UNVERIFIED CLAIMS` — treat
-  those findings with extra scepticism; the rest checked out against the tree.
+  **How the value is parsed.** devpair splits it into arguments itself, not via a
+  shell — no globbing, no `$VAR` expansion, no pipes. Two rules:
+
+  - **Quote the individual path, never the whole value.** Quoting everything
+    (`"python3 /opt/cli.py"`) yields a single argument with a space in its name,
+    which cannot launch.
+  - **Backslashes survive**, so a Windows path needs no doubling.
+
+  ```bash
+  # POSIX — no spaces in any path
+  export DEVPAIR_HERMES_CMD='/usr/bin/python3 /opt/hermes/cli.py'
+  # a path that contains a space: quote THAT path only
+  export DEVPAIR_HERMES_CMD='"/opt/my tools/hermes" --profile default'
+  ```
+  ```
+  rem Windows — the same value form works unchanged
+  set DEVPAIR_HERMES_CMD="C:\Program Files\Hermes\hermes.exe" --profile default
+  ```
+
+- **The pair's `file:line` claims are auto-verified**, in both the `file:438`
+  and the prose `file line 438` styles. Anchors naming a missing file or a line
+  past EOF are listed under `UNVERIFIED CLAIMS` — treat those findings with extra
+  scepticism; the rest checked out against the tree. This is the net that catches
+  a reviewer critiquing files it was never sent.
 - **Each turn reports token estimates** and stores the parsed verdict, blocker
   count and any unverified claims on the session, so `--json` gives a caller
   everything it needs without re-parsing prose.
 
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 70 regression tests (360 checks) pinning reviewer
+`python3.11 test_devpair.py` (or pytest) — 69 regression tests (366 checks) pinning reviewer
 selection, self-review refusal, driver-identity precedence, session
 side-effects/atomicity, merge-base diffs, error propagation, truncation
 maths, prompt-wide redaction, and the `--gate` exit codes (driven through the
@@ -315,7 +357,7 @@ required. Run after any change.
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 70 regression tests (360 checks)
+- `test_devpair.py` — 69 regression tests (366 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

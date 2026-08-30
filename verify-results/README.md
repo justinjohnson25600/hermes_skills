@@ -74,8 +74,10 @@ None for inline use — any model, any platform.
 
 Routing to a *different* model additionally needs the
 [dev-pair](../dev-pair/) skill at **v1.1.12 or later** (earlier versions have no
-`verify` subcommand) with `devpair` on PATH. Without it the skill runs inline and
-says so, rather than silently ignoring your model choice.
+`verify` subcommand) with `devpair` on PATH. Without it the skill **stops and
+tells you**, rather than quietly running inline: if you asked for an independent
+model, inline is the same model marking its own homework, and substituting one
+for the other without asking is exactly the failure this skill exists to catch.
 
 ### Verifying the install
 
@@ -264,7 +266,7 @@ the PASS 5 commands yourself — that is the only fully independent path.
 
 ## Version & history
 
-Current: **0.0.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
+Current: **0.0.6**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
 published change.
 
 ## License

@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.5
+version: 0.0.6
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -250,9 +250,12 @@ If you think an independent pass is warranted, offer it in one sentence and stop
 
 ### Sending the work out
 
-Requires the **dev-pair** skill v1.1.12+ (`devpair` on PATH) — earlier
-versions have no `verify` subcommand. **If it is absent, say so and
-run inline** — never silently drop the user's model choice.
+Requires the **dev-pair** skill v1.1.12+ (`devpair` on PATH) — earlier versions
+have no `verify` subcommand. **If it is absent, stop and say so.** Running inline
+instead is a substitution, not a fallback: the user asked for an independent
+model and inline is the same model marking its own homework. Report that the
+requested independent review cannot be performed, and ask whether to run inline
+— do not decide it for them.
 
 The other model runs in a separate, toolless process and **cannot see this
 conversation**, so the work must be serialised into the call:

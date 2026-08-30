@@ -2,6 +2,40 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.20 — 2026-08-30
+
+Found by a cross-model documentation review, in two different ways: one reviewer
+reported a real error, the other demonstrated a hole by failing.
+
+- **Claim verification missed prose-style anchors.** `verify_claims` matched only
+  `file.py:438`, not `file.py line 438`. A Kimi K3 review produced fifteen
+  findings against files it had never been sent, every citation in the prose
+  style, and the safety net cleared all of them — the one mechanism specifically
+  built to catch a reviewer reasoning about things it cannot see. Both forms are
+  now checked; re-run against that review, all five sampled anchors are flagged.
+
+- **The `--gate` severity vocabulary was undocumented per mode.** `verify` emits
+  `[CRITICAL]` while every other mode emits `[BLOCKER]`. The gate has always
+  counted both, but dev-pair's SKILL.md said only `[BLOCKER]`, so an agent
+  reading it could believe a verify report full of `[CRITICAL]` findings passes.
+  Now a mode-to-severity table. (GPT-5.6 Luna.)
+
+- **`DEVPAIR_HERMES_CMD` had no quoting contract.** Documented as "a full command
+  prefix" with one POSIX example. It now states that devpair splits the value
+  itself (no shell, no globbing, no expansion), that you quote the individual
+  path and never the whole value, that backslashes survive, and gives POSIX and
+  Windows examples — each verified against the parser rather than assumed.
+
+- **Corrected test counts.** The docs claimed 70 registered tests; the suite
+  registers 68 at 1.1.19. The per-version chain in this changelog was
+  reconstructed from git and corrected: 1.1.15=66, 1.1.16=66, 1.1.17=67,
+  1.1.18=67, 1.1.19=68. (Luna, VERIFIED ERROR — the claim was mine.)
+
+- **Paid-call examples are labelled as abbreviated**, since the line after them
+  calls `--driver` and `--requested-by` mandatory while the examples omit both.
+
+Tests: 68 → 69 (360 → 366 checks).
+
 ## 1.1.19 — 2026-08-30
 
 Everything below was found by staging to a Windows agent and running the suite
@@ -28,7 +62,7 @@ broken. Verified 360/360 on macOS and Windows.
   assertion failed — the exact symptom, three releases running, that looked like
   a devpair bug and was not.
 
-Tests: 68 → 70 (351 → 360 checks).
+Tests: 67 → 68 (351 → 360 checks).
 
 ## 1.1.18 — 2026-08-30
 
@@ -50,7 +84,7 @@ fleet said so.
   above to run the current interpreter directly, so it works anywhere Python
   does, and exercises a documented feature while it is at it.
 
-Tests: 67 → 68 (347 → 351 checks).
+Tests: 67 (347 → 351 checks).
 
 ## 1.1.17 — 2026-08-30
 

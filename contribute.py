@@ -82,15 +82,27 @@ def collect(agent: dict, skills: list[str]) -> dict:
 
 
 def compare(payload: dict) -> dict[str, tuple[bytes, bytes]]:
-    """Return {relpath: (repo_bytes, agent_bytes)} for files that differ."""
+    """Return {relpath: (repo_bytes, agent_bytes)} for files that differ.
+
+    Line endings are normalised before comparing. A Windows agent stores these
+    files with CRLF, so a byte comparison reports every one of them as changed,
+    on every scan, forever — which trains you to ignore the report and would
+    commit hundreds of line-ending "edits" the first time you ran --apply. Only
+    a real content change should surface.
+    """
     diffs = {}
     for rel, b64 in payload.get("files", {}).items():
         theirs = base64.b64decode(b64)
         local = ROOT / rel
         ours = local.read_bytes() if local.is_file() else b""
-        if ours != theirs:
+        if _norm(ours) != _norm(theirs):
             diffs[rel] = (ours, theirs)
     return diffs
+
+
+def _norm(b: bytes) -> bytes:
+    """CRLF/CR -> LF, and ignore a trailing-newline difference."""
+    return b.replace(b"\r\n", b"\n").replace(b"\r", b"\n").rstrip(b"\n")
 
 
 def show(rel: str, ours: bytes, theirs: bytes, name: str) -> None:
@@ -171,7 +183,9 @@ def main() -> int:
         return 0
 
     for rel, (_, theirs) in sorted(d.items()):
-        (ROOT / rel).write_bytes(theirs)
+        # Write LF: the payload comes from a Windows box and would otherwise
+        # drag CRLF into the repo, making the next scan differ again.
+        (ROOT / rel).write_bytes(theirs.replace(b"\r\n", b"\n"))
         print(f"applied: {rel}")
     print("\nStaged in the working tree, NOT committed. Now:")
     print("  1. review:            git diff")

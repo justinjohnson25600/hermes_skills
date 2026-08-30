@@ -759,6 +759,22 @@ def test_verify_claims_catches_hallucinated_anchors(base):
         clean = devpair.verify_claims("no anchors here at all", td)
         check("no false positives on prose", clean == [], f"got {clean}")
 
+        # Models cite in prose too — "README.md line 438", not "README.md:438".
+        # A Kimi review once produced fifteen findings against files it had never
+        # been sent, every anchor in this style, and the colon-only pattern
+        # cleared all of them. Both forms must be checked.
+        for style in ("real.py line 999", "real.py on line 999", "real.py lines 999"):
+            got = " | ".join(devpair.verify_claims(f"[MAJOR] {style} — past EOF", td))
+            check(f"prose anchor caught: {style!r}", "real.py" in got and "999" in got,
+                  f"got {got!r} — a fabricated citation would pass unflagged")
+        got = " | ".join(devpair.verify_claims("[MINOR] ghost.py line 5 — invented", td))
+        check("prose anchor to a missing file is flagged", "ghost.py" in got, f"got {got!r}")
+        ok = devpair.verify_claims("[MINOR] real.py line 2 — fine", td)
+        check("a VALID prose anchor is not flagged", ok == [], f"got {ok}")
+        # Ordinary prose containing a filename must not trip it.
+        quiet = devpair.verify_claims("see notes.md for the release lines", td)
+        check("prose without a line number is ignored", quiet == [], f"got {quiet}")
+
 
 # --- F3: doctor probes in parallel --------------------------------------------
 def test_doctor_probes_in_parallel():

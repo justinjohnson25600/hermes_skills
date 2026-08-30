@@ -131,7 +131,11 @@ def check_versions(skill: str, fix: bool) -> str | None:
                 f = d / doc
                 if not f.is_file():
                     continue
-                for claim in re.findall(r"[Tt]he (\w+) modes", f.read_text(encoding="utf-8")):
+                # Only NUMBER words are count claims. "the other modes" and "the
+                # paid modes" are ordinary prose, and flagging them made the gate
+                # cry wolf on a correct document — which teaches people to bypass.
+                counts = "|".join(words.values())
+                for claim in re.findall(rf"[Tt]he ({counts}) modes", f.read_text(encoding="utf-8")):
                     if claim.lower() != words.get(n, ""):
                         fail(f"[{skill}] {doc} says \"the {claim} modes\" but the CLI "
                              f"defines {n} ({words.get(n, n)})")

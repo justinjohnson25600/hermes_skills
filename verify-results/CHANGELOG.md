@@ -2,6 +2,21 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 0.0.6 — 2026-08-30
+
+One instruction change, from a GPT-5.6 Luna review of the skill contract.
+
+- **An unavailable reviewer is no longer silently downgraded to inline.** The
+  skill said: if `devpair` is absent, say so and run inline. Luna's point stands
+  — disclosure makes the substitution non-silent, but it is still a substitution
+  the user did not choose, and it swaps an independent review for the same model
+  marking its own homework. It now reports that the requested independent review
+  cannot be performed and asks, rather than deciding for them.
+
+Also aligned with dev-pair 1.1.20: the routing appendix's `--gate` description
+now matches dev-pair's own mode-to-severity table (`verify` blocks on
+`[CRITICAL]`, other modes on `[BLOCKER]`).
+
 ## 0.0.5 — 2026-08-30
 
 Documentation caught up with what the tool actually does, after a review by

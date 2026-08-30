@@ -1328,7 +1328,14 @@ def verify_claims(response: str, cwd: str | None = None) -> list[str]:
     root = Path(cwd or os.getcwd())
     problems: list[str] = []
     seen: set[tuple[str, int]] = set()
-    for raw, lineno in re.findall(r"\b([\w./\-]+\.[A-Za-z]\w{0,9}):(\d+)\b", response or ""):
+    # Two anchor styles, because models use both and only one was checked. A
+    # Kimi review once cited fifteen findings against files it had never been
+    # sent, every one written as "README.md line 438" — the colon-only pattern
+    # matched none of them, so the safety net passed a wholly fabricated report.
+    anchors = re.findall(r"\b([\w./\-]+\.[A-Za-z]\w{0,9}):(\d+)\b", response or "")
+    anchors += re.findall(r"\b([\w./\-]+\.[A-Za-z]\w{0,9})\s+(?:on\s+)?lines?\s+(\d+)",
+                          response or "", re.I)
+    for raw, lineno in anchors:
         try:
             n = int(lineno)
         except ValueError:
