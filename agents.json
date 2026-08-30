@@ -1,0 +1,66 @@
+{
+  "_comment": "Hermes agents that receive skill installs and updates. Edit this file, not the deploy script. `python3 deploy.py --list` shows status; `python3 deploy.py <skill>` delivers to every enabled agent.",
+  "agents": [
+    {
+      "name": "justins-mac-mini",
+      "host": "local",
+      "tailnet_ip": "100.125.86.20",
+      "platform": "macos",
+      "hermes_home": "~/.hermes",
+      "enabled": true,
+      "role": "origin",
+      "notes": "Development box and source of truth. Skills are authored here; deploys originate here."
+    },
+    {
+      "name": "hermes-windows",
+      "host": "justi@100.85.96.87",
+      "tailnet_ip": "100.85.96.87",
+      "platform": "windows",
+      "hermes_home": "%LOCALAPPDATA%\\hermes",
+      "enabled": true,
+      "role": "sentinel",
+      "notes": "SENTINEL host. NetBIOS name 'Hermes'. Six profiles, eleven cron jobs."
+    },
+    {
+      "name": "gmtek-m8",
+      "host": "justi@100.68.130.124",
+      "tailnet_ip": "100.68.130.124",
+      "platform": "windows",
+      "hermes_home": "%LOCALAPPDATA%\\hermes",
+      "enabled": true,
+      "role": "worker",
+      "notes": "NetBIOS name 'NucBox_M8'. Single provider family (zai) — devpair writes a TEMPLATE roster and cannot do independent review until a second family is configured."
+    },
+    {
+      "name": "jj-amd",
+      "host": "Justin@100.96.109.11",
+      "tailnet_ip": "100.96.109.11",
+      "platform": "windows",
+      "hermes_home": "%LOCALAPPDATA%\\hermes",
+      "enabled": true,
+      "role": "worker",
+      "notes": "Tailnet hostname is amd-jj-canvey, NOT jj-amd. RTX 5090 32GB — runs larger local models than any other box. SSH user is Justin@, not justi@."
+    },
+    {
+      "name": "jj-hp-prodesk",
+      "host": "justi@100.111.249.45",
+      "tailnet_ip": "100.111.249.45",
+      "platform": "windows",
+      "hermes_home": "%LOCALAPPDATA%\\hermes",
+      "enabled": false,
+      "role": "worker",
+      "blocked_reason": "sshd is listening and the box pings, but the mac's key is not authorised for any username (justi/Justin/justinjohnson/jj/hermes all denied). Enable by appending the mac pubkey to C:\\ProgramData\\ssh\\administrators_authorized_keys on that box, then set enabled=true and confirm the username.",
+      "notes": "Never onboarded. Hermes presence unconfirmed — verify it actually runs Hermes before treating a deploy failure as a regression."
+    }
+  ],
+  "unreachable_not_enrolled": [
+    {"name": "coley-micro-pc", "ip": "100.127.91.83", "why": "port 22 times out — no sshd or firewalled"},
+    {"name": "jack-laptop", "ip": "100.102.22.3", "why": "publickey denied; key never installed"},
+    {"name": "desktop-ag6v2jr-docker-desktop", "ip": "100.107.106.89", "why": "port 22 refused (Linux, container host)"},
+    {"name": "g0ksc-lap", "ip": "100.113.122.77", "why": "offline"},
+    {"name": "laptop", "ip": "100.94.249.118", "why": "offline"},
+    {"name": "macbook-pro", "ip": "100.93.198.34", "why": "offline"},
+    {"name": "ryzen-spain", "ip": "100.84.47.32", "why": "offline"},
+    {"name": "trigkey-g4", "ip": "100.89.220.87", "why": "offline"}
+  ]
+}

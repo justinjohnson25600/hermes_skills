@@ -28,6 +28,45 @@ under your Hermes home has drifted from the repo. It also refuses to let you
 reason about the remote from a stale ref — it fetches first.
 | [verify-results](verify-results/) | 0.0.4 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 
+## Delivering to a fleet
+
+`agents.json` lists the Hermes agents that receive skills; `deploy.py` installs to
+every enabled one in parallel.
+
+```bash
+python3 deploy.py --list                    # who receives, and what is blocking the rest
+python3 deploy.py dev-pair verify-results   # deliver named skills
+python3 deploy.py --all                     # everything in skills.json
+python3 deploy.py dev-pair --dry-run        # show the plan, change nothing
+```
+
+Adding a machine is a **data edit** — append an entry to `agents.json`, no code
+change:
+
+```json
+{ "name": "box", "host": "user@100.x.y.z", "platform": "windows",
+  "hermes_home": "%LOCALAPPDATA%\\hermes", "enabled": true, "role": "worker" }
+```
+
+Set `enabled: false` with a `blocked_reason` for a machine that is known but not
+yet reachable; `--list` prints the reason so it stays visible instead of being
+quietly forgotten.
+
+Four behaviours worth knowing, each of which exists because of a real failure:
+
+- **It waits for the CDN.** `raw.githubusercontent.com` serves a cached copy for
+  minutes after a push, so a deploy that races it installs the *previous*
+  release. `deploy.py` polls until the CDN serves the version this repo has.
+- **Payloads go via a temp file.** Long inline `python -c` commands are truncated
+  by `cmd.exe`; the payload is base64'd to `%TEMP%` and executed there.
+- **It removes stale copies.** Per-profile skill directories
+  (`<home>/profiles/*/skills/`) accumulate their own outdated copies of a skill,
+  and an agent may load one of those instead of the canonical one.
+- **It compares check counts, not just pass/fail.** An agent reporting fewer
+  checks than its peers is *skipping* them — a green "0 failed" hides it. A lower
+  count is reported as a failure, because that is exactly how a drift guard was
+  found to be inert on every Windows install.
+
 ## Installing a skill
 
 **One line, no clone:**
