@@ -41,6 +41,24 @@ DRY = %(dry)s
 h = os.environ.get("HERMES_HOME") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes")
 HOME = pathlib.Path(h) if h and pathlib.Path(h).is_dir() else pathlib.Path.home() / ".hermes"
 rep = {"host": os.environ.get("COMPUTERNAME") or os.uname().nodename, "home": str(HOME), "skills": {}}
+# COMPUTERNAME is NOT a machine identity: cloning a Windows image without sysprep
+# leaves every copy sharing a name (and a MachineGuid). The BIOS serial survives
+# imaging and is per-unit, so it is the honest key for "have I seen this box".
+try:
+    if os.name == "nt":
+        _s = subprocess.run(["powershell", "-NoProfile", "-Command",
+                             "(Get-CimInstance Win32_BIOS).SerialNumber"],
+                            capture_output=True, text=True, timeout=60)
+        _v = (_s.stdout or "").strip()
+        # Cheap mini-PCs ship an unfilled SMBIOS field, so the "serial" is a
+        # placeholder shared by every unit of that model. Treating those as an
+        # identity makes unrelated boxes collide.
+        if _v.lower() in {"default string", "to be filled by o.e.m.", "system serial number",
+                          "none", "n/a", "0", "123456789", "invalid"}:
+            _v = ""
+        rep["serial"] = _v or None
+except Exception:
+    rep["serial"] = None
 if not HOME.is_dir():
     rep["error"] = "no Hermes home found"
     print(json.dumps(rep)); raise SystemExit(0)
@@ -233,20 +251,20 @@ def main() -> int:
             print(f"  FAIL {name}: {r['error'][:160]}")
             failed.append(name)
             continue
-        # Two agents reporting the same COMPUTERNAME is not cosmetic: imaged
-        # Windows boxes share a hostname, and if the roster ever pointed two
-        # entries at one machine the second would silently overwrite the first
-        # and both would report success. Identity here is the roster entry;
-        # a collision means verify by tailnet IP or SSH host key, not by name.
-        rh = r.get("host")
-        if rh and rh in seen_hosts and seen_hosts[rh] != name:
-            print(f"  WARN {name}: reports COMPUTERNAME {rh!r}, same as {seen_hosts[rh]!r}. "
-                  f"Confirm these are different machines (compare SSH host keys) — if they "
-                  f"are one box, one roster entry is redundant and its result is not "
-                  f"independent.")
+        # Identity is the BIOS serial, not the hostname: these boxes are imaged
+        # clones that legitimately share a COMPUTERNAME (and MachineGuid), so
+        # keying on the name would warn forever on a correct roster and train
+        # the reader to ignore it. A repeated SERIAL is the real error — the
+        # same physical unit reached twice, whose second result is not
+        # independent evidence.
+        ident = r.get("serial") or r.get("host")
+        if ident and ident in seen_hosts and seen_hosts[ident] != name:
+            print(f"  WARN {name}: same machine as {seen_hosts[ident]!r} "
+                  f"(identity {ident!r}). One roster entry is redundant and its "
+                  f"result is not an independent check.")
             failed.append(name)
-        if rh:
-            seen_hosts[rh] = name
+        if ident:
+            seen_hosts[ident] = name
         vers = " ".join(f"{s}={d.get('version')}" for s, d in r.get("skills", {}).items())
         t = r.get("tests") or {}
         tt = f"{t.get('passed')}/{t.get('passed', 0) + t.get('failed', 0)}" if "passed" in t else "-"

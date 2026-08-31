@@ -53,12 +53,14 @@
       "hermes_home": "C:\\Users\\user\\AppData\\Local\\hermes",
       "enabled": true,
       "role": "worker",
-      "notes": "SSH username is 'user' (the Windows default), NOT an estate name. No system Python and no py launcher: only the Microsoft Store alias stub, which prints an install advert and exits 9009 -- use the Hermes venv interpreter in 'python'. Naming: Tailscale DNSName is jj-hp-prodesk, OS COMPUTERNAME is DESKTOP-1H61R6I -- both are this one machine, on the local LAN (192.168.0.107). Do not confuse it with the 'jack-prodesk' node, which is a separate box at a remote site.",
+      "notes": "SSH username is 'user' (the Windows default), NOT an estate name. No system Python and no py launcher: only the Microsoft Store alias stub, which prints an install advert and exits 9009 -- use the Hermes venv interpreter in 'python'. Naming: Tailscale DNSName is jj-hp-prodesk, OS COMPUTERNAME is DESKTOP-1H61R6I -- both are this one machine, on the local LAN (192.168.0.107). Do not confuse it with 'jack-prodesk' (100.101.106.68): a separate physical unit that shares this box's COMPUTERNAME and MachineGuid because both were cloned from one image. BIOS serial 8CG74119J9 distinguishes this one.",
       "authoring": false,
       "last_checked": "2026-08-30",
       "tailnet_hostname": "DESKTOP-1H61R6I",
       "python": "C:\\Users\\user\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
-      "tailnet_dnsname": "jj-hp-prodesk.taile12a6b.ts.net"
+      "tailnet_dnsname": "jj-hp-prodesk.taile12a6b.ts.net",
+      "bios_serial": "8CG74119J9",
+      "lan_ip": "192.168.0.107"
     },
     {
       "name": "jack-laptop",
@@ -75,17 +77,19 @@
     },
     {
       "name": "jack-prodesk",
-      "host": "UNKNOWN@100.101.106.68",
+      "host": "user@100.101.106.68",
       "tailnet_ip": "100.101.106.68",
       "tailnet_dnsname": "jack-prodesk.taile12a6b.ts.net",
       "platform": "windows",
-      "hermes_home": null,
-      "enabled": false,
+      "hermes_home": "C:\\Users\\user\\AppData\\Local\\hermes",
+      "enabled": true,
       "role": "worker",
       "authoring": false,
       "last_checked": "2026-08-30",
-      "blocked_reason": "sshd is listening on 22 and answering, but the mac's key is not authorised and the username is unknown -- user/jack/Jack/justi/hp/prodesk/jackp/owner all denied (administrator/Administrator get a connection reset, which is a disabled account, not a wrong name). Fix: on the box, append the mac pubkey to C:\\ProgramData\\ssh\\administrators_authorized_keys as ASCII with no BOM, icacls /inheritance:r granting only Administrators+SYSTEM, restart sshd, then report `whoami` so the username can be recorded here.",
-      "notes": "A SEPARATE machine from jj-hp-prodesk, despite reporting the same Windows COMPUTERNAME -- almost certainly deployed from the same image. Proof they are not one host: different SSH host keys (jack-prodesk SHA256:yRLYsvp7VVtsoNroFb5YKJoNQ8uBP6Ng3VAmSzVD/kE vs jj-hp-prodesk SHA256:powDMwNX3Vex1FKTA1HO6P0HCVasmOQW9pBGDxv5Cs0), both online simultaneously, and different networks (this one is remote via public IP 80.79.48.133; jj-hp-prodesk is on the local LAN). Enrolled 2026-08-30. Because the COMPUTERNAME collides, ALWAYS identify these two by tailnet IP or host key, never by hostname. Assume it has the same no-system-Python trap and record a per-agent 'python' path once reachable."
+      "notes": "SSH username 'user'. A SEPARATE PHYSICAL MACHINE from jj-hp-prodesk despite identical COMPUTERNAME (DESKTOP-1H61R6I) AND identical MachineGuid 524c361b-dd7f-404d-bee1-acad5754aa5e -- both were cloned from one image on 2025-07-24 without sysprep. Proof of distinctness: BIOS serial 8CG7346029 here vs 8CG74119J9 there, different SSH host keys, different LANs (192.168.88.22 remote site vs 192.168.0.107), both online at once. IDENTIFY BY BIOS SERIAL OR TAILNET IP -- hostname and MachineGuid are both useless for telling these apart. Same no-system-Python trap: only the Store alias stub, use the venv interpreter in 'python'.",
+      "python": "C:\\Users\\user\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+      "bios_serial": "8CG7346029",
+      "lan_ip": "192.168.88.22"
     }
   ],
   "unreachable_not_enrolled": [
