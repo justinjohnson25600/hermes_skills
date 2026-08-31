@@ -64,16 +64,18 @@
     },
     {
       "name": "jack-laptop",
-      "host": "justi@100.102.22.3",
+      "host": "UNKNOWN@100.102.22.3",
       "tailnet_ip": "100.102.22.3",
       "platform": "windows",
       "hermes_home": "%LOCALAPPDATA%\\hermes",
       "enabled": false,
       "role": "worker",
-      "blocked_reason": "sshd is LISTENING and the box is online on the tailnet (port 22 open, verified 2026-08-30), but every username is denied: publickey,password,keyboard-interactive \u2014 tried justi/Justin/justinjohnson/justinjohnson256/jj/hermes/jack. Tailscale SSH is NOT enabled on this node (no advertised host key), so the tailnet identity cannot be used to bypass the key. TO ENABLE, either: (a) append the mac pubkey 'ssh-ed25519 ...Hi3MXt hermes-macmini' to C:\\ProgramData\\ssh\\administrators_authorized_keys on that box, or (b) run `tailscale set --ssh` there to let the tailnet authenticate. Then confirm the username, set enabled=true, and run deploy.py.",
-      "notes": "Online and reachable on the tailnet; only authentication blocks it. Hermes presence unconfirmed. Tailnet owner shows as justinjohnson256@.",
+      "blocked_reason": "sshd is listening on 22 and the box is online, but the mac's public key is not authorised for ANY username: a verbose probe of user/justi/Jack/jack/jj/hermes/owner/laptop/admin never reaches 'Server accepts key', so this is a missing key, not a wrong username. Fix: on the box, append the mac pubkey to C:\\ProgramData\\ssh\\administrators_authorized_keys as ASCII with no BOM, icacls /inheritance:r granting only Administrators+SYSTEM, restart sshd, then report `whoami` so the username can be recorded.",
+      "notes": "Tailscale DNSName is jack-laptop; Windows COMPUTERNAME is DESKTOP-P95APJV. Prior estate notes call this box 'jj-laptop' and record Hermes at C:\\Users\\justi\\AppData\\Local\\hermes\\hermes-agent, so 'justi' is the most likely username -- unproven until the key is installed and whoami confirms it. sshd is reported to be bound to the Tailscale interface only. Expect the same no-system-Python trap as the prodesks: if `python` is only the Microsoft Store alias stub, record the venv interpreter as this agent's 'python' key.",
       "authoring": false,
-      "last_checked": "2026-08-30"
+      "last_checked": "2026-08-31",
+      "tailnet_hostname": "DESKTOP-P95APJV",
+      "tailnet_dnsname": "jack-laptop.taile12a6b.ts.net"
     },
     {
       "name": "jack-prodesk",
