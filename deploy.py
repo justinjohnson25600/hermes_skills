@@ -227,11 +227,26 @@ def main() -> int:
 
     print()
     counts, failed = [], []
+    seen_hosts: dict[str, str] = {}
     for name, r in results:
         if r.get("error"):
             print(f"  FAIL {name}: {r['error'][:160]}")
             failed.append(name)
             continue
+        # Two agents reporting the same COMPUTERNAME is not cosmetic: imaged
+        # Windows boxes share a hostname, and if the roster ever pointed two
+        # entries at one machine the second would silently overwrite the first
+        # and both would report success. Identity here is the roster entry;
+        # a collision means verify by tailnet IP or SSH host key, not by name.
+        rh = r.get("host")
+        if rh and rh in seen_hosts and seen_hosts[rh] != name:
+            print(f"  WARN {name}: reports COMPUTERNAME {rh!r}, same as {seen_hosts[rh]!r}. "
+                  f"Confirm these are different machines (compare SSH host keys) — if they "
+                  f"are one box, one roster entry is redundant and its result is not "
+                  f"independent.")
+            failed.append(name)
+        if rh:
+            seen_hosts[rh] = name
         vers = " ".join(f"{s}={d.get('version')}" for s, d in r.get("skills", {}).items())
         t = r.get("tests") or {}
         tt = f"{t.get('passed')}/{t.get('passed', 0) + t.get('failed', 0)}" if "passed" in t else "-"

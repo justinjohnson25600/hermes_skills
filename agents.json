@@ -53,11 +53,12 @@
       "hermes_home": "C:\\Users\\user\\AppData\\Local\\hermes",
       "enabled": true,
       "role": "worker",
-      "notes": "SSH username is 'user' (the Windows default), NOT an estate name. No system Python and no py launcher: only the Microsoft Store alias stub, which prints an install advert and exits 9009. Use the Hermes venv interpreter recorded in 'python'. Tailnet name is DESKTOP-1H61R6I; 'jack-prodesk' (100.101.106.68) is a DIFFERENT machine.",
+      "notes": "SSH username is 'user' (the Windows default), NOT an estate name. No system Python and no py launcher: only the Microsoft Store alias stub, which prints an install advert and exits 9009 -- use the Hermes venv interpreter in 'python'. Naming: Tailscale DNSName is jj-hp-prodesk, OS COMPUTERNAME is DESKTOP-1H61R6I -- both are this one machine, on the local LAN (192.168.0.107). Do not confuse it with the 'jack-prodesk' node, which is a separate box at a remote site.",
       "authoring": false,
       "last_checked": "2026-08-30",
       "tailnet_hostname": "DESKTOP-1H61R6I",
-      "python": "C:\\Users\\user\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe"
+      "python": "C:\\Users\\user\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+      "tailnet_dnsname": "jj-hp-prodesk.taile12a6b.ts.net"
     },
     {
       "name": "jack-laptop",
@@ -71,6 +72,20 @@
       "notes": "Online and reachable on the tailnet; only authentication blocks it. Hermes presence unconfirmed. Tailnet owner shows as justinjohnson256@.",
       "authoring": false,
       "last_checked": "2026-08-30"
+    },
+    {
+      "name": "jack-prodesk",
+      "host": "UNKNOWN@100.101.106.68",
+      "tailnet_ip": "100.101.106.68",
+      "tailnet_dnsname": "jack-prodesk.taile12a6b.ts.net",
+      "platform": "windows",
+      "hermes_home": null,
+      "enabled": false,
+      "role": "worker",
+      "authoring": false,
+      "last_checked": "2026-08-30",
+      "blocked_reason": "sshd is listening on 22 and answering, but the mac's key is not authorised and the username is unknown -- user/jack/Jack/justi/hp/prodesk/jackp/owner all denied (administrator/Administrator get a connection reset, which is a disabled account, not a wrong name). Fix: on the box, append the mac pubkey to C:\\ProgramData\\ssh\\administrators_authorized_keys as ASCII with no BOM, icacls /inheritance:r granting only Administrators+SYSTEM, restart sshd, then report `whoami` so the username can be recorded here.",
+      "notes": "A SEPARATE machine from jj-hp-prodesk, despite reporting the same Windows COMPUTERNAME -- almost certainly deployed from the same image. Proof they are not one host: different SSH host keys (jack-prodesk SHA256:yRLYsvp7VVtsoNroFb5YKJoNQ8uBP6Ng3VAmSzVD/kE vs jj-hp-prodesk SHA256:powDMwNX3Vex1FKTA1HO6P0HCVasmOQW9pBGDxv5Cs0), both online simultaneously, and different networks (this one is remote via public IP 80.79.48.133; jj-hp-prodesk is on the local LAN). Enrolled 2026-08-30. Because the COMPUTERNAME collides, ALWAYS identify these two by tailnet IP or host key, never by hostname. Assume it has the same no-system-Python trap and record a per-agent 'python' path once reachable."
     }
   ],
   "unreachable_not_enrolled": [
