@@ -2,6 +2,20 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.1.22 — 2026-08-30
+
+Fixed a test that passed for the wrong reason on Windows, found when the fifth
+agent joined the fleet.
+
+`test_missing_hermes_binary_is_soft_failure` hid the CLI by emptying `PATH`.
+That is not enough on Windows: CreateProcess searches the launching
+executable's own directory first, and Hermes ships `hermes.exe` beside the venv
+`python.exe` that runs the suite. The reviewer really launched and failed later
+with `Unknown provider 'p'`, so the test was reading a live CLI error while
+claiming to prove the missing-binary path. It now also pins
+`DEVPAIR_HERMES_CMD` to a path that cannot exist, which no lookup rule can
+resolve. Verified on the affected box: 365/366 -> 366/366.
+
 ## 1.1.21 — 2026-08-30
 
 Documentation-only. No behaviour change; 366 checks unchanged.

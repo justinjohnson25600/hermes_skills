@@ -133,19 +133,23 @@ def wait_for_cdn(skills: list[str], timeout: int = 420) -> dict:
 def deliver(agent: dict, skills: list[str], dry: bool) -> tuple[str, dict]:
     name, host = agent["name"], agent["host"]
     code = REMOTE % {"raw": RAW, "skills": skills, "dry": dry}
+    # Not every Windows box has a usable `python` on PATH. Some have only the
+    # Microsoft Store alias stub, which prints an install advert and exits 9009
+    # instead of running anything. An agent may therefore pin its interpreter.
+    py = agent.get("python") or "python"
     if host == "local":
         p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=1800)
         out = p.stdout
     else:
         b64 = base64.b64encode(code.encode()).decode()
-        writer = ('python -c "import base64,os,sys;'
+        writer = (f'"{py}" -c "import base64,os,sys;'
                   "open(os.environ['TEMP']+chr(92)+'_hsdeploy.py','wb')"
                   '.write(base64.b64decode(sys.stdin.read()))"')
         w = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, writer],
                            input=b64, capture_output=True, text=True, timeout=180)
         if w.returncode:
             return name, {"error": f"payload write failed: {(w.stderr or '').strip()[:200]}"}
-        p = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python %TEMP%\\_hsdeploy.py"],
+        p = subprocess.run(["ssh", "-o", "BatchMode=yes", host, f'"{py}" %TEMP%\\_hsdeploy.py'],
                            capture_output=True, text=True, timeout=1800)
         out = p.stdout
     try:

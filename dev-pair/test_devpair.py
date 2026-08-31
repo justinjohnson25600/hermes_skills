@@ -532,7 +532,14 @@ def test_untracked_files_are_read_not_just_named(base):
 # --- a missing hermes binary must degrade, not crash --------------------------
 def test_missing_hermes_binary_is_soft_failure():
     print("\n[errors] a missing `hermes` CLI falls through instead of crashing")
-    env = dict(os.environ, PATH="/nonexistent")
+    # Emptying PATH is NOT enough to hide the binary. On Windows, CreateProcess
+    # searches the launching executable's own directory before PATH, and Hermes
+    # installs hermes.exe right beside the venv python.exe that runs this test —
+    # so the reviewer really launched and failed later with "Unknown provider",
+    # and the test read a live CLI error as if it were the missing-binary path.
+    # DEVPAIR_HERMES_CMD pins resolution to something that cannot exist anywhere.
+    env = dict(os.environ, PATH="/nonexistent",
+               DEVPAIR_HERMES_CMD="/nonexistent/definitely-not-hermes")
     r = subprocess.run(
         [sys.executable, "-c",
          "import sys; sys.path.insert(0, %r); import devpair; "

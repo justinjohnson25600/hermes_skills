@@ -47,16 +47,17 @@
     },
     {
       "name": "jj-hp-prodesk",
-      "host": "justi@100.111.249.45",
+      "host": "user@100.111.249.45",
       "tailnet_ip": "100.111.249.45",
       "platform": "windows",
-      "hermes_home": "%LOCALAPPDATA%\\hermes",
-      "enabled": false,
+      "hermes_home": "C:\\Users\\user\\AppData\\Local\\hermes",
+      "enabled": true,
       "role": "worker",
-      "blocked_reason": "sshd is LISTENING and the box is online on the tailnet (port 22 open, verified 2026-08-30), but every username is denied: publickey,password,keyboard-interactive \u2014 tried justi/Justin/justinjohnson/justinjohnson256/jj/hermes. Tailscale SSH is NOT enabled on this node (no advertised host key), so the tailnet identity cannot be used to bypass the key. TO ENABLE, either: (a) append the mac pubkey 'ssh-ed25519 ...Hi3MXt hermes-macmini' to C:\\ProgramData\\ssh\\administrators_authorized_keys on that box, or (b) run `tailscale set --ssh` there to let the tailnet authenticate. Then confirm the username, set enabled=true, and run deploy.py.",
-      "notes": "Online and reachable on the tailnet; only authentication blocks it. Hermes presence still unconfirmed \u2014 verify Hermes actually runs there before treating a deploy failure as a regression.",
+      "notes": "SSH username is 'user' (the Windows default), NOT an estate name. No system Python and no py launcher: only the Microsoft Store alias stub, which prints an install advert and exits 9009. Use the Hermes venv interpreter recorded in 'python'. Tailnet name is DESKTOP-1H61R6I; 'jack-prodesk' (100.101.106.68) is a DIFFERENT machine.",
       "authoring": false,
-      "last_checked": "2026-08-30"
+      "last_checked": "2026-08-30",
+      "tailnet_hostname": "DESKTOP-1H61R6I",
+      "python": "C:\\Users\\user\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe"
     },
     {
       "name": "jack-laptop",
