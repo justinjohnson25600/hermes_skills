@@ -64,18 +64,19 @@
     },
     {
       "name": "jack-laptop",
-      "host": "UNKNOWN@100.102.22.3",
+      "host": "justi@100.102.22.3",
       "tailnet_ip": "100.102.22.3",
       "platform": "windows",
-      "hermes_home": "%LOCALAPPDATA%\\hermes",
-      "enabled": false,
+      "hermes_home": "C:\\Users\\justi\\AppData\\Local\\hermes",
+      "enabled": true,
       "role": "worker",
-      "blocked_reason": "sshd is listening on 22 and the box is online, but the mac's public key is not authorised for ANY username: a verbose probe of user/justi/Jack/jack/jj/hermes/owner/laptop/admin never reaches 'Server accepts key', so this is a missing key, not a wrong username. Fix: on the box, append the mac pubkey to C:\\ProgramData\\ssh\\administrators_authorized_keys as ASCII with no BOM, icacls /inheritance:r granting only Administrators+SYSTEM, restart sshd, then report `whoami` so the username can be recorded.",
-      "notes": "Tailscale DNSName is jack-laptop; Windows COMPUTERNAME is DESKTOP-P95APJV. Prior estate notes call this box 'jj-laptop' and record Hermes at C:\\Users\\justi\\AppData\\Local\\hermes\\hermes-agent, so 'justi' is the most likely username -- unproven until the key is installed and whoami confirms it. sshd is reported to be bound to the Tailscale interface only. Expect the same no-system-Python trap as the prodesks: if `python` is only the Microsoft Store alias stub, record the venv interpreter as this agent's 'python' key.",
+      "notes": "SSH username 'justi' (confirmed by whoami: desktop-p95apjv\\justi). Tailscale DNSName jack-laptop, COMPUTERNAME DESKTOP-P95APJV, BIOS serial CND1123DQK, MachineGuid 636d0615-1a2a-4f5a-8b23-07152449a373 -- unlike the two prodesks this box has genuinely unique identifiers. Unlike the prodesks it DOES resolve `python` on PATH, but it resolves to the Hermes venv interpreter, which is what the 'python' key pins anyway. sshd is bound to the Tailscale interface only.",
       "authoring": false,
       "last_checked": "2026-08-31",
       "tailnet_hostname": "DESKTOP-P95APJV",
-      "tailnet_dnsname": "jack-laptop.taile12a6b.ts.net"
+      "tailnet_dnsname": "jack-laptop.taile12a6b.ts.net",
+      "python": "C:\\Users\\justi\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+      "bios_serial": "CND1123DQK"
     },
     {
       "name": "jack-prodesk",
