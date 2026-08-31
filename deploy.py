@@ -53,6 +53,25 @@ except Exception as e:
     rep["error"] = "installer fetch failed: %%s" %% e
     print(json.dumps(rep)); raise SystemExit(0)
 
+def _walk(root, pattern):
+    """rglob that survives Windows junctions.
+
+    pathlib.rglob raises OSError 448 on an untraversable reparse point, and npm
+    workspace installs create exactly those under node_modules. One junction
+    aborts the whole walk, so the scan is done manually with the unreadable and
+    irrelevant branches pruned.
+    """
+    hits = []
+    skip = {"node_modules", ".git", "__pycache__", "backups", "venv"}
+    for dirpath, dirnames, filenames in os.walk(str(root), onerror=lambda e: None):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        for fn in filenames:
+            p = pathlib.Path(dirpath) / fn
+            if p.match(pattern):
+                hits.append(p)
+    return hits
+
+
 def ver(f):
     try:
         m = re.search(r"^version:\s*([0-9.]+)", f.read_text(encoding="utf-8", errors="replace"), re.M)
@@ -76,14 +95,14 @@ if not DRY:
         stray = HOME / s / "SKILL.md"
         if stray.is_file() and canon and stray != canon:
             shutil.rmtree(HOME / s, ignore_errors=True); cleaned.append(str(stray))
-        for f in list(HOME.rglob("%%s/SKILL.md" %% s)):
+        for f in list(_walk(HOME, "%%s/SKILL.md" %% s)):
             if "backups" in str(f) or f == canon:
                 continue
             shutil.rmtree(f.parent, ignore_errors=True); cleaned.append(str(f))
 rep["cleaned"] = cleaned
 
 for s in SKILLS:
-    hits = [f for f in HOME.rglob("%%s/SKILL.md" %% s) if "backups" not in str(f)]
+    hits = [f for f in _walk(HOME, "%%s/SKILL.md" %% s) if "backups" not in str(f)]
     rep["skills"].setdefault(s, {})["version"] = ver(hits[0]) if hits else None
     rep["skills"][s]["copies"] = len(hits)
 
