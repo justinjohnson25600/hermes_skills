@@ -2,6 +2,60 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.0 — 2026-10-06
+
+Security and accounting release. Every change was developed test-first (each new
+test was red against 1.1.22) and reviewed by `zai-indirect/glm-5.3` through
+dev-pair itself; all findings were fixed. 99 regression tests (563 checks).
+
+- **SECURITY — the reviewer really is read-only now.** 1.1.22 launched it with
+  `-t ""`, which Hermes reads as "use the configured toolsets": the reviewer had
+  terminal, write_file, patch and delegate tools under YOLO approvals. It now gets
+  an explicit zero-tool toolset (`context_engine`, override `reviewer_toolset`)
+  and `--ignore-rules`, so the operator's SOUL/memory/AGENTS.md are not sent to a
+  third-party model. Hermes refuses an unknown toolset name rather than widening.
+  The operator's session env (YOLO, resume, model overrides) is scrubbed.
+- **Fail-closed enforcement.** `config.json` is read strictly on paid paths:
+  absent = no limits, valid = enforced, anything else refuses. Every attempt —
+  fallbacks and `doctor --live` probes included — is reserved in the ledger before
+  the call and gets an outcome record after it. A ledger lock held past 30 s
+  refuses the attempt instead of spending outside the cap.
+- **`doctor` is free by default** (static: config, roster, CLI, toolset, zero model
+  calls). `doctor --live --requested-by WHO` probes each backend as a capped,
+  ledgered paid attempt.
+- **Transport.** Prompts past the Windows command-line limit go through a private
+  temp file to `hermes chat -Q --query-file --format stream-json`; an oversize
+  inline prompt says "too large", never "CLI not found". Timeouts kill the whole
+  reviewer process tree.
+- **Route receipts.** Every attempt records requested vs REPORTED provider/model
+  (from `--usage-file`, or Hermes' session store for file transport):
+  `reported-match` / `reported-mismatch` (shouted on stderr) / `unknown`.
+- **Evidence-aware gate.** A harness manifest records clipped sections, omitted
+  files, failed git calls, the paths sent and a packet sha256. `--gate` fails an
+  approval on partial evidence unless `--allow-partial` (then labelled PARTIAL);
+  unknown coverage always fails. Citations are checked against the packet;
+  `--strict-citations` makes them blocking. `--dry-run` shows coverage up front.
+- **Sessions.** Names are contained (no paths, `..`, device names); the implicit
+  session is per project; concurrent appends are locked (a timed-out lock saves
+  the paid turn to a sidecar rather than writing unlocked); unparseable files are
+  quarantined; all stored turns are redacted on load. `prune --redact` rewrites
+  old sessions; `prune` also sweeps stale sidecars but never a live lock.
+- **Prompt crossover from LLM Council** (no extra calls): neutral framing, stakes
+  on every BLOCKER/MAJOR, and a closing CONFIDENCE / flip condition / falsifier.
+  Short verdict-less replies ("let me check the repo first…") are failed
+  attempts, not reviews.
+- **The suite can no longer make a live call.** It is run directly by `install.py`
+  and `check_consistency.py`; one 1.1.22 test launched the real `hermes` with an
+  invalid provider, and current Hermes falls back to a working provider — a paid
+  call on every install. The suite now forces a local no-network stub at import.
+- **Benchmark.** Same reviewer, 6 seeded defects + 2 clean changes, 2 rounds:
+  seeded-defect recall 9/12 (1.1.22, run through a zero-tool shim) → 12/12;
+  approve-on-buggy 3/12 → 1/12; false positives 0/4 → 0/4.
+
+Upgrading: old sessions load (redacted); run `devpair prune --redact` once. Old
+ledger lines still count. `install.py` now also installs `skill_files` (the
+`references/offline-assessment.md` guide).
+
 ## 1.1.22 — 2026-08-30
 
 Fixed a test that passed for the wrong reason on Windows, found when the fifth

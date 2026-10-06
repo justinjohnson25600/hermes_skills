@@ -23,6 +23,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import errno
+import hashlib
 import json
 import os
 import re
@@ -30,7 +32,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -176,42 +180,75 @@ def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-class _ledger_lock:
-    """Exclusive lock around count-and-append.
+class LockTimeout(RuntimeError):
+    """A lock that exists could not be acquired before the deadline."""
+
+
+LOCK_DEADLINE_S = 30
+_LOCK_BUSY_ERRNOS = {getattr(errno, n) for n in ("EAGAIN", "EWOULDBLOCK", "EACCES", "EDEADLK", "EDEADLOCK")
+                     if hasattr(errno, n)}
+
+
+class _file_lock:
+    """Exclusive lock on a side-car lock file.
 
     Without it the cap is only advisory: two processes both read `used < cap`,
     both append, and both call a backend — a `daily_cap: 1` machine spends
     twice. Uses a separate lock file so the lock survives ledger truncation.
+    The same primitive serialises session read-modify-write.
 
     Degrades honestly: if no locking primitive exists on this platform, the
     caller is told the cap is advisory rather than being given a false promise.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, lockpath: str | None = None) -> None:
+        self.lockpath = lockpath
         self.fh = None
         self.locked = False
 
     def __enter__(self):
+        lockpath = self.lockpath or (str(LEDGER) + ".lock")
         try:
-            LEDGER.parent.mkdir(parents=True, exist_ok=True)
-            self.fh = open(str(LEDGER) + ".lock", "a+")
+            Path(lockpath).parent.mkdir(parents=True, exist_ok=True)
+            self.fh = open(lockpath, "a+")
         except OSError:
             return self
+        # Both platforms poll a NON-blocking lock against an explicit deadline.
+        # Windows LK_LOCK retries once per second, gives up after 10 tries and
+        # used to fall through UNLOCKED; POSIX LOCK_EX blocks forever behind a
+        # suspended holder. A lock that exists but cannot be acquired in time
+        # raises LockTimeout — proceeding unlocked would silently reintroduce
+        # the very race the lock exists to prevent.
+        deadline = time.time() + LOCK_DEADLINE_S
         try:
             import fcntl  # POSIX
-            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
-            self.locked = True
+            acquire = lambda: fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # noqa: E731
         except ImportError:
             try:
                 import msvcrt  # Windows
-                self.fh.seek(0)
-                msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+
+                def acquire():
+                    self.fh.seek(0)
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except ImportError:
+                return self  # no primitive at all: caller sees locked=False
+        while True:
+            try:
+                acquire()
                 self.locked = True
-            except (ImportError, OSError):
-                pass
-        except OSError:
-            pass
-        return self
+                return self
+            except OSError as e:
+                if e.errno not in _LOCK_BUSY_ERRNOS:
+                    return self  # locking unsupported here (e.g. ENOLCK): caller sees locked=False
+                if time.time() > deadline:
+                    try:
+                        self.fh.close()
+                    except OSError:
+                        pass
+                    self.fh = None
+                    raise LockTimeout(f"{lockpath} is held by another devpair process "
+                                      f"(waited {LOCK_DEADLINE_S}s)")
+                time.sleep(0.05)
 
     def __exit__(self, *exc):
         if self.fh:
@@ -231,6 +268,14 @@ class _ledger_lock:
             except OSError:
                 pass
         return False
+
+
+class _ledger_lock(_file_lock):
+    """The ledger's count-and-append lock (kept as its own name: tests and
+    callers substitute it to simulate a filesystem without locking)."""
+
+    def __init__(self) -> None:
+        super().__init__(None)
 
 
 def _scan_ledger(days: int = 0) -> tuple[list[dict], int, bool]:
@@ -278,20 +323,25 @@ def read_ledger(days: int = 0) -> list[dict]:
 
 
 def runs_today() -> int:
+    """Paid backend ATTEMPTS today. Outcome records are bookkeeping, not spend."""
+    return _count_attempts(_scan_ledger(days=2)[0])
+
+
+def _count_attempts(recs: list[dict]) -> int:
     today = _today()
-    return sum(1 for r in _scan_ledger(days=2)[0] if r.get("day") == today)
+    return sum(1 for r in recs if r.get("day") == today and r.get("kind") != "outcome")
 
 
 def daily_cap() -> int:
-    """0 = unlimited. Config-driven so a machine can set its own ceiling."""
-    try:
-        return int(_load_cfg().get("daily_cap", 0) or 0)
-    except (TypeError, ValueError):
-        return 0
+    """0 = unlimited. DISPLAY ONLY — enforcement uses _enforcement(), which
+    refuses on an invalid config instead of reading it as 'unlimited'."""
+    state, cfg, _ = _cfg_state()
+    cap = cfg.get("daily_cap") if state == "valid" else None
+    return cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else 0
 
 
 def log_invocation(mode: str, reviewer: dict, driver: dict, requested_by: str,
-                   context_chars: int) -> bool:
+                   context_chars: int, extra: dict | None = None) -> bool:
     """Append one run to the ledger. Returns whether it was durably recorded.
 
     A crashed writer can leave a line with no trailing newline; appending after
@@ -305,6 +355,12 @@ def log_invocation(mode: str, reviewer: dict, driver: dict, requested_by: str,
         "requested_by": requested_by, "context_chars": context_chars,
         "cwd": os.getcwd(), "pid": os.getpid(),
     }
+    if extra:
+        rec.update(extra)
+    return _append_ledger(rec)
+
+
+def _append_ledger(rec: dict) -> bool:
     try:
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
         prefix = ""
@@ -327,28 +383,52 @@ def log_invocation(mode: str, reviewer: dict, driver: dict, requested_by: str,
         return False
 
 
-def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
-    """Gate a paid run. Exits non-zero rather than spending tokens.
+def _enforcement() -> tuple[int, bool, bool]:
+    """(daily_cap, require_attestation, allow_unlocked_cap) for a PAID path.
 
-    Count and append happen under one lock, so the cap cannot be raced. When a
-    cap is in force the whole path FAILS CLOSED: an unreadable or unwritable
-    ledger means the quota cannot be proven, and an unprovable limit is not a
-    limit. With no cap set the ledger stays best-effort — an audit trail should
-    never be the thing that blocks a review nobody limited.
+    Three config states, kept apart on purpose: ABSENT means no limits (the
+    documented default); VALID is enforced; PRESENT-BUT-INVALID refuses. The old
+    reader turned a malformed or unreadable file into {} — which silently
+    disabled BOTH the cap and required attestation. A broken limit is not an
+    absent limit.
     """
-    cap = daily_cap()
+    state, cfg, problem = _cfg_state()
+    if state == "invalid":
+        sys.exit(
+            "devpair: refusing a paid run — the enforcement config is invalid.\n"
+            f"  {problem}\n"
+            "  A broken config must not silently disable the daily cap or required\n"
+            f"  attestation. Fix {CONFIG} (or delete it to run with no limits), then retry."
+        )
+    cap = cfg.get("daily_cap") or 0
+    return int(cap), bool(cfg.get("require_attestation")), bool(cfg.get("allow_unlocked_cap"))
+
+
+def _new_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S-") + f"{os.getpid()}-{int(time.time() * 1000) % 100000}"
+
+
+def _reserve_attempt_locked(args, reviewer: dict, driver: dict, context_chars: int, *,
+                    run_id: str, attempt: int) -> tuple[bool, str]:
+    """Reserve ONE paid backend attempt: check quota and append the ledger
+    record under one lock, before the call. Returns (ok, refusal_message).
+
+    Every attempt is reserved — fallbacks and live doctor probes included. The
+    old flow authorised once and then let N fallback calls run uncounted, so
+    "1/1 paid runs" could mean three billed calls, and the ledger named a
+    reviewer that never answered.
+    """
+    cap, require, allow_unlocked = _enforcement()
     requested_by = (getattr(args, "requested_by", None)
                     or os.environ.get("DEVPAIR_REQUESTED_BY") or "").strip()
-    require = bool(_load_cfg().get("require_attestation"))
     enforcing = bool(cap) or require
 
     if require and not requested_by:
-        sys.exit(
+        return False, (
             "devpair: this install requires --requested-by on every run.\n"
             "  Name who asked for the review, e.g. --requested-by user\n"
             "  (agents: this is an attestation — do not fill it in unless the\n"
-            "  user actually asked)."
-        )
+            "  user actually asked).")
 
     with _ledger_lock() as lock:
         if cap:
@@ -356,8 +436,8 @@ def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
                 # A "hard" cap that cannot serialise is not hard. Refuse rather
                 # than continue under a guarantee we cannot keep — set
                 # allow_unlocked_cap to accept an advisory cap deliberately.
-                if not _load_cfg().get("allow_unlocked_cap"):
-                    sys.exit(
+                if not allow_unlocked:
+                    return False, (
                         "devpair: a daily cap is set, but no file lock is available "
                         f"for {LEDGER}.\n"
                         "  Without one, two concurrent runs can both pass the same cap,\n"
@@ -366,8 +446,7 @@ def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
                         "  Note: network filesystems (NFS/SMB) may report a lock while\n"
                         "  not excluding other hosts. Keep the ledger on local disk.\n"
                         "  To accept an advisory cap anyway, set \"allow_unlocked_cap\": true "
-                        f"in {CONFIG}."
-                    )
+                        f"in {CONFIG}.")
                 print("[devpair] WARNING: no file lock available — the daily cap is "
                       "advisory here (allow_unlocked_cap is set), and two concurrent "
                       "runs could both pass it.", file=sys.stderr)
@@ -375,51 +454,92 @@ def authorize(args, reviewer: dict, driver: dict, context_chars: int) -> None:
             if not readable:
                 # Unreadable is NOT zero. Treating it as zero would reopen a cap
                 # that has already been spent.
-                sys.exit(
+                return False, (
                     f"devpair: the invocation ledger at {LEDGER} exists but cannot "
                     "be read, so today's usage is unknown.\n"
                     f"  A daily cap is set ({cap}/day) and unknown usage is not zero "
                     "usage — refusing rather than risk overspending.\n"
-                    "  Check the file's permissions, then retry."
-                )
+                    "  Check the file's permissions, then retry.")
             if corrupt:
-                sys.exit(
+                return False, (
                     f"devpair: the invocation ledger has {corrupt} unreadable "
                     f"line(s), so today's usage cannot be proven.\n"
                     f"  A daily cap is set ({cap}/day), and an unprovable limit is "
                     "not a limit — refusing rather than risk overspending.\n"
-                    f"  Inspect or repair {LEDGER}, then retry."
-                )
-            used = sum(1 for r in recs if r.get("day") == _today())
+                    f"  Inspect or repair {LEDGER}, then retry.")
+            used = _count_attempts(recs)
             if used >= cap:
-                sys.exit(
-                    f"devpair: daily cap reached — {used}/{cap} paid runs today.\n"
+                return False, (
+                    f"devpair: daily cap reached — {used}/{cap} paid attempts today.\n"
                     "  This is a hard stop: no reviewer will be called.\n"
                     f"  Raise or clear it with \"daily_cap\" in {CONFIG}, or wait for tomorrow.\n"
-                    "  See what spent it: devpair audit --days 1"
-                )
+                    "  See what spent it: devpair audit --days 1")
 
-        wrote = log_invocation(args.mode, reviewer, driver,
-                               requested_by or "unattributed", context_chars)
+        wrote = log_invocation(getattr(args, "mode", "?"), reviewer, driver,
+                               requested_by or "unattributed", context_chars,
+                               extra={"kind": "attempt", "run_id": run_id, "attempt": attempt})
 
     if enforcing and not wrote:
         # The run would proceed unrecorded, which makes the cap uncountable and
         # a required attestation meaningless. Refuse instead of quietly
         # downgrading the guarantee the docs advertise.
-        sys.exit(
+        return False, (
             f"devpair: could not record this run in {LEDGER}.\n"
             "  This install enforces a daily cap or required attestation, both of\n"
             "  which depend on the ledger — proceeding would spend tokens that\n"
-            "  nothing could account for. Fix the path's permissions and retry."
-        )
+            "  nothing could account for. Fix the path's permissions and retry.")
+    return True, ""
+
+
+def reserve_attempt(args, reviewer: dict, driver: dict, context_chars: int, **kw) -> tuple[bool, str]:
+    """Reserve ONE paid attempt under the ledger lock. A ledger lock held past
+    the deadline REFUSES the attempt: spending without the lock would let two
+    processes both pass the cap."""
+    try:
+        return _reserve_attempt_locked(args, reviewer, driver, context_chars, **kw)
+    except LockTimeout as e:
+        return False, (f"devpair: could not lock the invocation ledger — {e}.\n"
+                       "  Refusing the paid call rather than spending outside the cap. "
+                       "Retry when the other run finishes.")
+
+
+def authorize(args, reviewer: dict, driver: dict, context_chars: int,
+              *, run_id: str | None = None) -> str:
+    """Gate a paid run by reserving its FIRST attempt. Exits non-zero rather
+    than spending tokens. Returns the run id that later attempts and outcome
+    records share."""
+    run_id = run_id or _new_run_id()
+    ok, why = reserve_attempt(args, reviewer, driver, context_chars, run_id=run_id, attempt=1)
+    if not ok:
+        sys.exit(why)
+    return run_id
+
+
+def record_outcome(run_id: str, attempt: int, receipt: dict) -> None:
+    """Best-effort outcome record for an attempt (status, reported route,
+    usage). Not counted against the cap — the reservation already was."""
+    keep = ("status", "transport", "identity", "requested_provider", "requested_model",
+            "reported_provider", "reported_model", "api_calls", "input_tokens",
+            "output_tokens", "estimated_cost_usd", "cost_status", "elapsed_s", "warnings")
+    rec = {"at": _now(), "epoch": time.time(), "day": _today(), "kind": "outcome",
+           "run_id": run_id, "attempt": attempt}
+    rec.update({k: receipt.get(k) for k in keep if k in receipt})
+    try:
+        with _ledger_lock():
+            _append_ledger(rec)
+    except LockTimeout as e:
+        # The attempt itself is already counted; only its outcome note is lost.
+        print(f"[devpair] WARNING: outcome not recorded — {e}", file=sys.stderr)
 
 
 
 
 def _load_cfg() -> dict:
+    """TOLERANT read for roster/order/display. Never use it to decide whether a
+    paid call is allowed — that is _enforcement()/_cfg_state()."""
     if CONFIG.is_file():
         try:
-            cfg = json.loads(CONFIG.read_text())
+            cfg = json.loads(CONFIG.read_text(encoding="utf-8-sig"))
             # Valid JSON of the WRONG SHAPE (a list, a string, a number) would
             # otherwise reach every .get() call site and crash the whole CLI —
             # _load_roster() runs before argparse, so a stray `[]` bricked even
@@ -431,6 +551,32 @@ def _load_cfg() -> dict:
         except Exception:
             pass
     return {}
+
+
+def _cfg_state() -> tuple[str, dict, str]:
+    """('absent' | 'valid' | 'invalid', cfg, problem) — strict, for enforcement."""
+    if not CONFIG.exists():
+        return "absent", {}, ""
+    try:
+        raw = CONFIG.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        return "invalid", {}, f"cannot read {CONFIG}: {e}"
+    try:
+        cfg = json.loads(raw)
+    except Exception as e:
+        return "invalid", {}, f"{CONFIG} is not valid JSON ({e})"
+    if not isinstance(cfg, dict):
+        return "invalid", {}, f"{CONFIG} must be a JSON object, got {type(cfg).__name__}"
+    problems = []
+    cap = cfg.get("daily_cap")
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 0):
+        problems.append(f"daily_cap must be a non-negative integer (0 = unlimited), got {cap!r}")
+    for k in ("require_attestation", "allow_unlocked_cap"):
+        if k in cfg and not isinstance(cfg[k], bool):
+            problems.append(f"{k} must be true or false, got {cfg[k]!r}")
+    if problems:
+        return "invalid", cfg, "; ".join(problems)
+    return "valid", cfg, ""
 
 
 def driver_identity(explicit: str | None = None) -> dict:
@@ -638,39 +784,239 @@ def pick_reviewer(explicit: str | None, driver_spec: str | None = None,
 # ---------------------------------------------------------------------------
 # Session state — this is what makes it a PAIR and not a one-shot reviewer.
 # ---------------------------------------------------------------------------
+_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
+_WIN_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} |     {f"{d}{i}" for d in ("COM", "LPT") for i in range(1, 10)}
+
+
+def _valid_session_name(name: str | None) -> bool:
+    """Letters/digits/._- only, no '..', no trailing dot, and never a Windows
+    device name (the device rule applies to the part before the first dot, so
+    `NUL.json` IS the null device and the turn would be silently lost)."""
+    if not name or not _SESSION_NAME_RE.match(name) or ".." in name or name.endswith("."):
+        return False
+    return name.split(".", 1)[0].upper() not in _WIN_DEVICES
+
+
+def _contained_session(name: str) -> Path:
+    """SESSIONS/<name>.json, refusing anything that resolves outside SESSIONS.
+    `--session ../x` (or an absolute/drive path, which makes `SESSIONS / name`
+    discard SESSIONS entirely) used to read and write wherever it pointed."""
+    if not _valid_session_name(name):
+        sys.exit(f"devpair: invalid session name {name!r} — use letters, digits, '.', '_' "
+                 "or '-' (max 100 chars), with no path separators or '..'.")
+    p = SESSIONS / f"{name}.json"
+    try:
+        root = SESSIONS.resolve()
+        if not str(p.resolve()).startswith(str(root) + os.sep):
+            sys.exit(f"devpair: session {name!r} resolves outside {SESSIONS} — refusing.")
+    except OSError:
+        pass
+    return p
+
+
+def project_root(cwd: str | None = None) -> str:
+    """Identity of the project being reviewed: the git top-level when inside a
+    work tree, else the working directory. Normalised for comparison."""
+    cwd = cwd or os.getcwd()
+    top = sh(["git", "rev-parse", "--show-toplevel"], cwd)
+    root = top if top and Path(top).is_dir() else cwd
+    return os.path.normcase(os.path.realpath(root))
+
+
+def _same_project(stored: str | None, root: str) -> bool:
+    """A session belongs to `root` if it recorded that root, or (legacy
+    sessions recorded the raw cwd) a directory inside it. A session with no
+    project recorded is treated as matching — nothing says otherwise."""
+    if not stored:
+        return True
+    s = os.path.normcase(os.path.realpath(stored))
+    return s == root or s.startswith(root.rstrip("\\/") + os.sep)
+
+
+def _read_pointers() -> tuple[str | None, dict]:
+    """(legacy_single_name, {project_root: name}) from CURRENT. The pointer used
+    to be ONE global name, so a review in project B silently continued — and
+    replayed — project A's session."""
+    try:
+        raw = CURRENT.read_text(encoding="utf-8").strip() if CURRENT.is_file() else ""
+    except OSError:
+        raw = ""
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return None, {k: v for k, v in data.items() if isinstance(v, str)}
+        except Exception:
+            pass
+        return None, {}
+    return (raw or None), {}
+
+
+def _current_for(root: str) -> str | None:
+    legacy, mapping = _read_pointers()
+    name = mapping.get(root)
+    if name is None and legacy:
+        name = legacy
+    if name and not _valid_session_name(name):
+        print(f"[devpair] note: ignoring invalid current-session pointer {name!r}", file=sys.stderr)
+        return None
+    if name:
+        p = SESSIONS / f"{name}.json"
+        if p.is_file() and not _same_project(load_session(p, quarantine=False).get("project"), root):
+            # The pointed-to session belongs to another project — never replay it here.
+            return None
+    return name
+
+
+def _set_current(root: str, name: str) -> None:
+    legacy, mapping = _read_pointers()
+    if legacy and _valid_session_name(legacy):
+        lp = SESSIONS / f"{legacy}.json"
+        owner = load_session(lp, quarantine=False).get("project") if lp.is_file() else None
+        if owner:
+            mapping.setdefault(os.path.normcase(os.path.realpath(owner)), legacy)
+    mapping[root] = name
+    CURRENT.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CURRENT.with_name(CURRENT.name + f".tmp-{os.getpid()}")
+    tmp.write_text(json.dumps(mapping, indent=1), encoding="utf-8")
+    os.replace(tmp, CURRENT)
+
+
+def active_session_names() -> set[str]:
+    legacy, mapping = _read_pointers()
+    return set(mapping.values()) | ({legacy} if legacy else set())
+
+
+def _new_session_name() -> str:
+    """A timestamp name that is not already taken. Callers that pin it hold the
+    CURRENT lock across choose-and-pin, so two processes never pick the same
+    name; the short random suffix also keeps unpinned names (chosen at the start
+    of a run, pinned only after the review) from colliding across processes."""
+    base = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
+    taken = active_session_names()
+    name, n = base, 2
+    while (SESSIONS / f"{name}.json").exists() or name in taken:
+        name, n = f"{base}-{n}", n + 1
+    return name
+
+
 def session_path(name: str | None = None, create: bool = True) -> Path:
     """Resolve the active session file.
 
     create=False resolves without side effects (for read-only commands like
     `log`), so merely asking where the session is never invents a new one.
+    The default session is per PROJECT: another project's session is never
+    picked up implicitly.
     """
     SESSIONS.mkdir(parents=True, exist_ok=True)
     if name:
-        return SESSIONS / f"{name}.json"
-    if CURRENT.is_file():
-        cur = CURRENT.read_text().strip()
-        if cur:
-            return SESSIONS / f"{cur}.json"
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if create:
-        CURRENT.write_text(stamp)
+        return _contained_session(name)
+    root = project_root()
+    cur = _current_for(root)
+    if cur:
+        return _contained_session(cur)
+    if not create:
+        return SESSIONS / f"{_new_session_name()}.json"
+    # Choose-and-pin under the ONE pointer lock, like every other CURRENT write.
+    try:
+        with _file_lock(str(CURRENT) + ".lock"):
+            cur = _current_for(root)
+            if cur:
+                return _contained_session(cur)
+            stamp = _new_session_name()
+            _set_current(root, stamp)
+    except LockTimeout as e:
+        sys.exit(f"devpair: the session pointer is locked by another devpair run ({e}). "
+                 "Retry when it finishes, or pass --session NAME.")
     return SESSIONS / f"{stamp}.json"
 
 
-def load_session(path: Path) -> dict:
+def load_session(path: Path, *, quarantine: bool = True) -> dict:
+    """A session, or a fresh one. A session file that exists but cannot be
+    parsed is MOVED ASIDE (quarantined) rather than silently replaced: the old
+    behaviour returned an empty session and the next save overwrote the whole
+    history."""
     if path.is_file():
         try:
-            return json.loads(path.read_text())
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            raw = None
+        try:
+            data = json.loads(raw) if raw is not None else None
+            if isinstance(data, dict):
+                data.setdefault("turns", [])
+                return _redact_session(data)
         except Exception:
             pass
-    return {"created": _now(), "project": os.getcwd(), "turns": []}
+        if quarantine and raw is not None:
+            # Only a file we could READ but not PARSE is quarantined; an unreadable
+            # one (permissions, sharing violation) is left exactly where it is.
+            aside = path.with_name(path.name + f".corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+            try:
+                # The quarantined copy is redacted too: legacy sessions saved
+                # --ask/--focus verbatim, and a corrupt file is still on disk.
+                aside.write_text(redact_secrets(raw or "")[0], encoding="utf-8")
+                path.unlink()
+                print(f"[devpair] WARNING: session {path.name} was unreadable — kept (redacted) as "
+                      f"{aside.name}; starting a fresh session.", file=sys.stderr)
+            except OSError:
+                pass
+    return {"created": _now(), "project": None, "turns": []}
+
+
+_REDACT_TURN_KEYS = ("ask", "focus", "response")
+
+
+def _redact_session(data: dict) -> dict:
+    """Redact EVERY turn at the load boundary — one choke point. Redacting only
+    the newly appended turn left credentials from older turns on disk and
+    replayed them to the next reviewer through prior_context."""
+    for t in data.get("turns") or []:
+        if isinstance(t, dict):
+            for k in _REDACT_TURN_KEYS:
+                if isinstance(t.get(k), str):
+                    t[k] = redact_secrets(t[k])[0]
+    return data
 
 
 def save_session(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)  # transcripts hold review text; owner-only where supported
+    except OSError:
+        pass
     os.replace(tmp, path)  # atomic on POSIX — a crash never leaves a torn file
+
+
+def append_turn(path: Path, turn: dict, project: str) -> dict:
+    """Reload-append-save under a per-session lock. Atomic replace alone did not
+    serialise read-modify-write: two runs that loaded the same session before
+    the model call each saved their copy, and the second erased the first."""
+    try:
+        with _file_lock(str(path) + ".lock"):
+            sess = load_session(path)
+            sess.setdefault("turns", []).append(turn)
+            if not sess.get("project"):
+                sess["project"] = project
+            save_session(path, sess)
+        return sess
+    except LockTimeout as e:
+        return _rescue_turn(path, turn, project, str(e))
+
+
+def _rescue_turn(path: Path, turn: dict, project: str, why: str) -> dict:
+    """The review was paid for: never lose it, never write it unlocked."""
+    rescue = path.with_name(f"{path.stem}.turn-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                            f"-{os.getpid()}.json")
+    save_session(rescue, {"created": _now(), "project": project, "turns": [turn],
+                          "rescued_from": path.name})
+    print(f"[devpair] WARNING: session lock unavailable ({why}); this turn was saved to "
+          f"{rescue.name} instead of being written unlocked.", file=sys.stderr)
+    return {"turns": [turn], "project": project}
 
 
 def prior_context(sess: dict, limit: int = 4) -> str:
@@ -729,7 +1075,20 @@ def clip(text: str, limit: int, label: str = "") -> str:
     head_n, tail_n = int(limit * 0.7), int(limit * 0.25)
     head, tail = text[:head_n], text[-tail_n:]
     omitted = len(text) - head_n - tail_n
+    sink = getattr(_TLS, "clips", None)
+    if isinstance(sink, list):
+        sink.append({"section": label, "chars": len(text), "omitted_chars": omitted})
     return f"{head}\n\n[... {label} truncated: {omitted} chars omitted ...]\n\n{tail}"
+
+
+def last_manifest() -> dict | None:
+    """Harness-side evidence manifest of the most recent gather() on THIS
+    thread: what was sent, what was clipped, what was left out and why. The
+    gate decides coverage from THIS, never from what the reviewer says."""
+    return getattr(_TLS, "manifest", None)
+
+
+_DIFF_PATH_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$", re.M)
 
 
 # ---------------------------------------------------------------------------
@@ -775,6 +1134,23 @@ _PLACEHOLDERISH = re.compile(
     r"|redacted|placeholder|example|dummy|none|null|true|false|test|localhost)$"
 )
 
+# Token COUNTS are not tokens: input_tokens, max_tokens, token_count, num_tokens.
+_COUNT_NAME = re.compile(r"(?i)(tokens$|^max_?tokens?|tokens?_(count|limit|budget|used|in|out)$|^num_?tokens?)")
+
+
+# identifier(...), identifier[...], a.b.c(...) — a call or index, not a credential.
+_CODE_EXPR = re.compile(r"^[A-Za-z_][\w.]*\s*[(\[]")
+
+
+def _CODE_NOT_SECRET(name: str, value: str) -> bool:
+    """An `assigned-secret` match that is plainly code, not a credential:
+    a call or index expression (`_as_int(u.get(...))`, `cfg["x"]`) or a
+    token-COUNT name. Bare numbers are NOT exempt: a numeric PIN is a secret. Redacting those garbled code under review —
+    reviewers were sent `"input_tokens": [REDACTED]` and could not read it."""
+    if _CODE_EXPR.match(value):
+        return True
+    return bool(_COUNT_NAME.search(name or ""))
+
 
 def redact_secrets(text: str) -> tuple[str, int]:
     """Strip credential-shaped strings. Returns (clean_text, count_redacted).
@@ -792,6 +1168,8 @@ def redact_secrets(text: str) -> tuple[str, int]:
             secret = m.group(group)
             if not secret or _PLACEHOLDERISH.match(secret):
                 return m.group(0)
+            if kind == "assigned-secret" and _CODE_NOT_SECRET(m.group(1), secret):
+                return m.group(0)
             hits += 1
             whole, start = m.group(0), m.start()
             # Splice the placeholder into the match, preserving everything else.
@@ -807,6 +1185,36 @@ def redact_secrets(text: str) -> tuple[str, int]:
 
 
 def gather(args) -> tuple[str, list[str]]:
+    _TLS.clips = []
+    _TLS.manifest = None
+    omitted: list[dict] = []    # required evidence that was NOT sent, and why
+    failures: list[str] = []    # context commands that failed
+    paths: list[str] = []       # repo-relative paths whose content WAS sent
+    try:
+        context, notes = _gather_parts(args, omitted, failures, paths)
+    finally:
+        clips = list(getattr(_TLS, "clips", None) or [])
+        _TLS.clips = None
+    total_clipped = any(c["section"] == "total context" for c in clips)
+    gaps = ([f"{c['section']} truncated ({c['omitted_chars']:,} of {c['chars']:,} chars omitted)"
+             for c in clips]
+            + [f"{o['source']}: {o['reason']}" for o in omitted]
+            + [f"context command failed: {f}" for f in failures])
+    _TLS.manifest = {
+        "complete": not gaps,
+        "gaps": gaps,
+        "clipped": clips,
+        "omitted": omitted,
+        "failures": failures,
+        "total_clipped": total_clipped,
+        "paths": sorted(set(paths)),
+        "context_chars": len(context),
+        "sha256": hashlib.sha256(context.encode("utf-8", "replace")).hexdigest(),
+    }
+    return context, notes
+
+
+def _gather_parts(args, omitted: list, failures: list, paths: list) -> tuple[str, list[str]]:
     parts: list[str] = []
     notes: list[str] = []
     cwd = os.getcwd()
@@ -827,25 +1235,33 @@ def gather(args) -> tuple[str, list[str]]:
             src = f"git diff {ref}...HEAD"
             if note:
                 notes.append(f"`{src}` failed ({note}) — the ref may not exist locally")
+                failures.append(f"{src} ({note})")
         else:
             d, note = sh(["git", "diff", "HEAD"], cwd, want_status=True)
             src = "git diff HEAD (uncommitted)"
             if note:
                 notes.append(f"`{src}` failed ({note})")
-        untracked = sh(["git", "ls-files", "--others", "--exclude-standard"], cwd)
+                failures.append(f"{src} ({note})")
+        untracked, lnote = sh(["git", "ls-files", "--others", "--exclude-standard"], cwd, want_status=True)
+        if lnote:
+            notes.append(f"`git ls-files --others` failed ({lnote}) — untracked files unknown")
+            failures.append(f"git ls-files --others ({lnote})")
         if d.strip():
+            paths.extend(m.group(2) for m in _DIFF_PATH_RE.finditer(d))
             parts.append(f"## DIFF UNDER REVIEW — {src}\n```diff\n{clip(d, MAX_DIFF_CHARS, 'diff')}\n```")
         elif not note and not untracked.strip():
             notes.append(f"no diff found for '{src}'")
         if ref:
             u, unote = sh(["git", "diff", "HEAD"], cwd, want_status=True)
             if u.strip():
+                paths.extend(m.group(2) for m in _DIFF_PATH_RE.finditer(u))
                 parts.append(
                     "## UNCOMMITTED CHANGES (not in the branch diff above)\n"
                     f"```diff\n{clip(u, MAX_DIFF_CHARS // 2, 'uncommitted diff')}\n```"
                 )
             elif unote:
                 notes.append(f"`git diff HEAD` failed ({unote})")
+                failures.append(f"git diff HEAD ({unote})")
         if untracked.strip():
             files = [f for f in untracked.splitlines() if f.strip()]
             parts.append(
@@ -856,21 +1272,31 @@ def gather(args) -> tuple[str, list[str]]:
             # `git diff`, so a review of a new-file-only change would see
             # nothing but a filename. Read a bounded number of them.
             shown = 0
-            for f in files:
+            for idx, f in enumerate(files):
                 if shown >= MAX_UNTRACKED_FILES:
+                    rest = files[idx:]
                     parts.append(
-                        f"## NOTE\n{len(files) - shown} further untracked file(s) not shown "
+                        f"## NOTE\n{len(rest)} further untracked file(s) not shown "
                         f"(limit {MAX_UNTRACKED_FILES}). Use --files to include specific ones."
                     )
+                    for r in rest:
+                        omitted.append({"source": r, "reason": f"untracked file beyond the {MAX_UNTRACKED_FILES}-file limit"})
                     break
                 p = Path(cwd) / f
                 try:
-                    if not p.is_file() or p.stat().st_size > MAX_UNTRACKED_BYTES:
+                    if not p.is_file():
+                        continue
+                    if p.stat().st_size > MAX_UNTRACKED_BYTES:
+                        omitted.append({"source": f, "reason": f"untracked file larger than {MAX_UNTRACKED_BYTES:,} bytes"})
                         continue
                     body = p.read_text(errors="replace")
-                except Exception:
+                except Exception as e:
+                    omitted.append({"source": f, "reason": f"unreadable ({type(e).__name__})"})
                     continue
-                if not body.strip() or "\x00" in body[:1024]:
+                if not body.strip():
+                    continue  # empty: nothing to review
+                if "\x00" in body[:1024]:
+                    omitted.append({"source": f, "reason": "binary untracked file not shown"})
                     continue
                 numbered = "\n".join(
                     f"{i:>5}| {ln}" for i, ln in enumerate(body.splitlines(), 1)
@@ -879,22 +1305,29 @@ def gather(args) -> tuple[str, list[str]]:
                     f"## NEW FILE (untracked): {f}\n```\n"
                     f"{clip(numbered, MAX_UNTRACKED_CHARS, f)}\n```"
                 )
+                paths.append(f)
                 shown += 1
 
     for f in args.files or []:
         p = Path(f).expanduser()
         if not p.is_file():
             notes.append(f"file not found: {f}")
+            omitted.append({"source": f, "reason": "requested --files entry not found"})
             continue
         try:
             body = p.read_text(errors="replace")
         except Exception as e:
             notes.append(f"unreadable {f}: {e}")
+            omitted.append({"source": f, "reason": f"requested --files entry unreadable ({type(e).__name__})"})
             continue
         numbered = "\n".join(f"{i:>5}| {ln}" for i, ln in enumerate(body.splitlines(), 1))
         parts.append(
             f"## FILE: {p}\n```\n{clip(numbered, MAX_FILE_CHARS, p.name)}\n```"
         )
+        try:
+            paths.append(os.path.relpath(p.resolve(), cwd))
+        except ValueError:  # different drive on Windows
+            paths.append(str(p))
 
     if args.plan:
         p = Path(args.plan).expanduser()
@@ -980,7 +1413,28 @@ SUSPECT, from what you cannot see. If context is missing that would change your
 verdict, say exactly what you'd need. Never bluff certainty you don't have.
 Ground every concern in the evidence actually shown to you — if you are reasoning
 from a general pattern rather than from their code, label it as such.
+
+TOOLS: you have none. You cannot run commands, open files, browse, or check
+anything against a live system — the evidence below is everything you can see.
+Do not announce checks you are about to run: write the whole review now, and put
+any check you would want run into the testing section as a recommendation.
+
+FRAMING: their question is a hypothesis, not a premise. If it rests on a wrong
+premise, or offers a choice between options that are both wrong, say that first.
+Judge against an explicit decision rule — what "good enough" means here — and
+state it in one line when it is not obvious.
+
+STAKES: every [BLOCKER] or [MAJOR] must name the decision it changes (ship or
+not, this design or another). A finding that changes no decision is [MINOR] at most.
 """
+
+CONFIDENCE_TAIL = """
+## CONFIDENCE
+High / Medium / Low — then one line: what you saw versus what you had to assume.
+
+## WHAT WOULD CHANGE MY MIND
+Flip condition: the one concrete fact that, if shown to you, would change your verdict.
+Falsifier: the cheapest observation that would prove your most serious finding wrong."""
 
 SHAPES = {
     "critique": """Respond in EXACTLY this shape:
@@ -1190,7 +1644,7 @@ ASK_HINT = {
 
 
 def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | None,
-                 notes: list[str] | None = None) -> str:
+                 notes: list[str] | None = None, manifest: dict | None = None) -> str:
     # `verify` critiques a finished deliverable that may not be code at all, so
     # it carries its own role. Every other mode is the software-supervision one.
     blocks = [VERIFY_ROLE if mode == "verify" else ROLE]
@@ -1198,6 +1652,16 @@ def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | Non
         blocks.append(f"\n## FOCUS DIRECTIVE\nThe colleague specifically wants your attention on: {focus}\nStill report anything critical you find outside that focus.")
     blocks.append(prior_context(sess))
     blocks.append(f"\n## WHAT THEY ARE ASKING\n{ask or ASK_HINT.get(mode, '')}")
+    if isinstance(manifest, dict) and manifest.get("gaps"):
+        # The harness — not the reviewer — knows what was left out. Saying so
+        # lets the reviewer calibrate instead of approving what it never saw.
+        gaps = "\n".join(f"- {g}" for g in manifest["gaps"][:12])
+        blocks.append(
+            "\n## EVIDENCE SCOPE (reported by the harness, not a guess)\n"
+            "You are NOT seeing everything in scope. Missing or truncated:\n"
+            f"{gaps}\n"
+            "Any approval you give covers only what is shown — say what the gaps could hide."
+        )
     if context.strip():
         blocks.append(f"\n## CONTEXT / EVIDENCE\n{context}")
     else:
@@ -1205,7 +1669,8 @@ def build_prompt(mode: str, ask: str, context: str, sess: dict, focus: str | Non
             "\n## CONTEXT / EVIDENCE\n(none supplied — if you cannot review responsibly "
             "without seeing code, say exactly what you need and stop.)"
         )
-    blocks.append("\n## REQUIRED OUTPUT SHAPE\n" + SHAPES[mode])
+    shape = SHAPES[mode] + ("" if mode == "verify" else CONFIDENCE_TAIL)
+    blocks.append("\n## REQUIRED OUTPUT SHAPE\n" + shape)
     blocks.append(
         "\nBe dense. Every line must earn its place. A short sharp review beats a "
         "long thorough-looking one. Do not restate the context back to them."
@@ -1318,12 +1783,71 @@ def gate_failed(response: str) -> tuple[bool, str]:
     return False, f"verdict: {verdict}"
 
 
-def verify_claims(response: str, cwd: str | None = None) -> list[str]:
+def coverage_status(manifest: dict | None) -> tuple[str, list[str]]:
+    """complete | partial | unknown, from the HARNESS manifest only."""
+    if not isinstance(manifest, dict):
+        return "unknown", ["no evidence manifest — coverage cannot be established"]
+    gaps = [str(g) for g in (manifest.get("gaps") or [])]
+    return ("complete" if manifest.get("complete") and not gaps else "partial"), gaps
+
+
+def gate_decision(response: str, manifest: dict | None, *, allow_partial: bool = False,
+                  claim_problems: list[str] | None = None,
+                  strict_citations: bool = False) -> tuple[bool, str, str]:
+    """(failed, reason, coverage). Verdict checks first (gate_failed), then
+    COVERAGE: an approval is only as good as the evidence behind it, and that
+    is decided by what the harness sent — the reviewer saying "I saw
+    everything" cannot override a clipped or incomplete packet."""
+    failed, reason = gate_failed(response)
+    coverage, gaps = coverage_status(manifest)
+    if failed:
+        return True, reason, coverage
+    if coverage != "complete":
+        gap_txt = "; ".join(gaps[:4]) + (f"; +{len(gaps) - 4} more" if len(gaps) > 4 else "")
+        if allow_partial and coverage == "partial":
+            reason = f"{reason} — PARTIAL evidence accepted by --allow-partial ({gap_txt})"
+        else:
+            return True, (f"{reason}, but the evidence was {coverage}: {gap_txt} — narrow the "
+                          "scope or pass --allow-partial to accept a PARTIAL approval"), coverage
+    if strict_citations and claim_problems:
+        return True, (f"{reason}, but {len(claim_problems)} cited anchor(s) could not be verified "
+                      f"(--strict-citations): {claim_problems[0]}"), coverage
+    return False, reason, coverage
+
+
+def _in_packet(raw: str, packet_paths: list[str]) -> bool:
+    """Was this cited path part of the evidence actually sent? Matched on path
+    suffix (a reviewer may cite `devpair.py` for `tools/devpair.py`), never on
+    mere existence in the working tree."""
+    r = raw.replace("\\", "/").lstrip("./").lower()
+    for p in packet_paths:
+        q = p.replace("\\", "/").lstrip("./").lower()
+        if q == r or q.endswith("/" + r) or r.endswith("/" + q):
+            return True
+    return False
+
+
+def _located_in_text(name: str, text: str | None) -> bool:
+    """The basename appears in the packet AS A LOCATION — `name:12`,
+    `File ".../name", line 12`, `name line 12` — i.e. a traceback or compiler
+    message the reviewer was shown. A bare mention (comment, import, prose)
+    does not count, or --strict-citations would excuse almost anything."""
+    if not text or not name:
+        return False
+    pat = (r"(?:^|[\s/\\\"'(])" + re.escape(name)
+           + r"(?:\"?,?\s*line\s+\d+|:\d+)")
+    return re.search(pat, text, re.I | re.M) is not None
+
+
+def verify_claims(response: str, cwd: str | None = None,
+                  packet_paths: list[str] | None = None,
+                  packet_text: str | None = None) -> list[str]:
     """Check every `path:line` the reviewer cited.
 
     It reasons from pasted text and cannot open files, so its anchors are
     claims, not facts. Returns human-readable problems (missing file, line past
-    EOF). Files outside the working tree are ignored rather than guessed at.
+    EOF, or — when the packet is known — a file it was never sent). Files
+    outside the working tree are ignored rather than guessed at.
     """
     root = Path(cwd or os.getcwd())
     problems: list[str] = []
@@ -1344,6 +1868,10 @@ def verify_claims(response: str, cwd: str | None = None) -> list[str]:
         if (raw, n) in seen:
             continue
         seen.add((raw, n))
+        if packet_paths is not None and not _in_packet(raw, packet_paths) \
+                and not _located_in_text(Path(raw).name, packet_text):
+            problems.append(f"{raw}:{n} — not in the evidence sent to the reviewer")
+            continue
         cand = (root / raw) if not os.path.isabs(raw) else Path(raw)
         if not cand.exists():
             # Try a basename match anywhere shallow in the tree before crying wolf.
@@ -1402,36 +1930,362 @@ def _hermes_command() -> list[str]:
     return [shutil.which("hermes") or "hermes"]
 
 
-def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tuple[bool, str]:
-    cmd = _hermes_command() + [
-        "-z", prompt,
-        "-m", reviewer["model"],
-        "--provider", reviewer["provider"],
-        "-t", "",
-    ]
-    env = dict(os.environ)
-    env["HERMES_NONINTERACTIVE"] = "1"
-    if verbose:
-        print(f"[devpair] invoking {reviewer['label']} ({reviewer['provider']}/{reviewer['model']}) "
-              f"with {len(prompt):,} chars", file=sys.stderr)
+# ---------------------------------------------------------------------------
+# Reviewer launch. Three guarantees live here, and each was broken before:
+#
+#  1. READ-ONLY. `hermes -z ... -t ""` does NOT mean "no tools": Hermes
+#     normalises an empty toolset to None and then loads the config's full CLI
+#     toolset (terminal, write_file, patch, execute_code, delegate_task, ...)
+#     with approvals bypassed (oneshot sets HERMES_YOLO_MODE). The reviewer is
+#     now launched with an explicit toolset that resolves to ZERO tools
+#     (default `context_engine`; override with `reviewer_toolset`), plus
+#     --ignore-rules so the operator's SOUL/memory/AGENTS.md are neither sent
+#     to a third-party model nor allowed to steer the review.
+#  2. TRANSPORT. Windows CreateProcess caps the whole command line at 32,767
+#     chars; a bigger prompt raised FileNotFoundError(winerror 206), which was
+#     reported as "hermes not found". Large prompts now travel through a
+#     private temp file (`hermes chat -Q --query-file`), never through argv.
+#  3. RECEIPTS. Every attempt records what was REQUESTED and what the backend
+#     REPORTED (provider/model/completion/usage), read from Hermes' own
+#     --usage-file. A selection banner is not evidence of who answered.
+# ---------------------------------------------------------------------------
+REVIEWER_TOOLSET_DEFAULT = "context_engine"
+_WIN_CMDLINE_SAFE = 30_000      # CreateProcess hard limit is 32,767 UTF-16 units
+_POSIX_ARG_SAFE = 100_000       # Linux MAX_ARG_STRLEN is 131,072 bytes per arg
+_TLS = threading.local()
+
+
+def last_receipt() -> dict | None:
+    """Receipt of the most recent run_reviewer() call made on THIS thread."""
+    return getattr(_TLS, "receipt", None)
+
+
+def _reviewer_toolset() -> str:
+    env = os.environ.get("DEVPAIR_REVIEWER_TOOLSET", "").strip()
+    if env:
+        return env
+    v = _load_cfg().get("reviewer_toolset")
+    return v.strip() if isinstance(v, str) and v.strip() else REVIEWER_TOOLSET_DEFAULT
+
+
+def _prompt_transport() -> str:
+    v = os.environ.get("DEVPAIR_PROMPT_TRANSPORT") or _load_cfg().get("prompt_transport") or "auto"
+    v = str(v).strip().lower()
+    return v if v in ("auto", "inline", "file") else "auto"
+
+
+def _fits_inline(cmd: list[str]) -> bool:
+    if os.name == "nt":
+        return len(subprocess.list2cmdline(cmd)) < _WIN_CMDLINE_SAFE
+    return all(len(a.encode("utf-8", "replace")) < _POSIX_ARG_SAFE for a in cmd)
+
+
+def _norm_model(m: str) -> str:
+    m = (m or "").lower().rsplit("/", 1)[-1]
+    return re.sub(r"[^a-z0-9]", "", m)
+
+
+def _route_identity(req_provider: str, req_model: str,
+                    rep_provider: str | None, rep_model: str | None) -> str:
+    """reported-match | reported-mismatch | unknown. A match is what the backend
+    REPORTED — useful evidence, never cryptographic proof of the upstream model."""
+    if not rep_provider or not rep_model:
+        return "unknown"
+    same = ((rep_provider or "").strip().lower() == (req_provider or "").strip().lower()
+            and _norm_model(rep_model) == _norm_model(req_model))
+    return "reported-match" if same else "reported-mismatch"
+
+
+def _kill_tree(p: subprocess.Popen) -> None:
+    """Kill the reviewer AND its children. subprocess.run's timeout kills only
+    the direct child; hermes.exe launches a Python child that kept billing."""
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                           capture_output=True, timeout=15)
+        else:
+            import signal
+            os.killpg(p.pid, signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        p.kill()
+    except Exception:
+        pass
+
+
+def _launch(cmd: list[str], timeout: int, env: dict) -> tuple[int, str, str]:
+    kw: dict = {}
+    if os.name == "nt":
+        kw["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kw["start_new_session"] = True
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                         errors="replace", env=env, **kw)
+    try:
+        out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, f"reviewer timed out after {timeout}s"
-    except FileNotFoundError:
-        # `hermes` not on PATH. Must be a soft failure: the retry loop should
-        # move on (and doctor should report it) rather than dying on a traceback.
-        return False, "the `hermes` CLI was not found on PATH — is Hermes installed?"
-    except OSError as e:
-        return False, f"could not launch reviewer: {type(e).__name__}: {e}"
-    out = (p.stdout or "").strip()
-    err = (p.stderr or "").strip()
-    if p.returncode != 0:
-        detail = err or out or f"exit {p.returncode} with no output"
-        return False, f"exit {p.returncode}: {detail[:400]}"
-    if not out or "agent failed" in out.lower()[:200]:
-        return False, out or err or "no output from reviewer"
-    return True, out
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=10)
+        except Exception:
+            pass
+        raise
+    return p.returncode, out or "", err or ""
+
+
+def _parse_stream_json(stdout: str) -> tuple[str | None, dict]:
+    """(final_text, result_event) from `--format stream-json` JSONL output."""
+    texts: list[str] = []
+    result: dict = {}
+    seen = False
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        seen = True
+        if ev.get("type") == "text" and isinstance(ev.get("text"), str):
+            texts.append(ev["text"])
+        elif ev.get("type") == "result":
+            result = ev
+    if not seen:
+        return None, {}
+    final = result.get("text") if isinstance(result.get("text"), str) and result.get("text") else "".join(texts)
+    return final, result
+
+
+def _hermes_home() -> Path:
+    h = os.environ.get("HERMES_HOME", "").strip()
+    if h:
+        return Path(h)
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+    return Path.home() / ".hermes"
+
+
+def _session_store_receipt(session_id: str | None) -> dict | None:
+    """What Hermes' own session store recorded for this run (read-only):
+    model, billing provider and base URL. The chat/stream-json transport has no
+    --usage-file, but it returns a session_id — so large-prompt reviews get the
+    same strength of identity evidence as inline ones, instead of 'unknown'."""
+    if not session_id or not re.match(r"^[A-Za-z0-9_.:-]{1,128}$", str(session_id)):
+        return None
+    db = _hermes_home() / "state.db"
+    prof = os.environ.get("HERMES_PROFILE", "").strip()
+    if prof and re.match(r"^[A-Za-z0-9_-]{1,64}$", prof):
+        # Profile store first whenever a profile is named — HERMES_HOME may be
+        # the root (profiles/<p>/state.db) or already the profile dir itself.
+        cand = _hermes_home() / "profiles" / prof / "state.db"
+        db = cand if cand.is_file() else db
+    if not db.is_file():
+        return None
+    try:
+        import sqlite3
+        q = "SELECT model, billing_provider, billing_base_url FROM sessions WHERE id = ?"
+        row = None
+        for opener in ("ro", "query_only"):
+            con = None
+            try:
+                if opener == "ro":
+                    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=5)
+                else:
+                    # A WAL database whose -shm cannot be created read-only:
+                    # open normally but forbid writes on this connection.
+                    con = sqlite3.connect(str(db), timeout=5)
+                    con.execute("PRAGMA query_only = 1")
+                row = con.execute(q, (str(session_id),)).fetchone()
+                break
+            except sqlite3.OperationalError:
+                continue
+            finally:
+                if con is not None:
+                    con.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {"model": row[0], "provider": row[1], "base_url": row[2]}
+
+
+def _as_int(v) -> int | None:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# Operator-session state that must not follow the reviewer into its own run.
+_SCRUB_ENV = ("HERMES_YOLO_MODE", "HERMES_RESUME", "HERMES_SESSION_ID", "HERMES_CONTINUE",
+              "HERMES_SESSION_SOURCE", "HERMES_SESSION_SOURCE_EXPLICIT", "HERMES_INFERENCE_MODEL",
+              "HERMES_INFERENCE_PROVIDER")
+
+
+def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tuple[bool, str]:
+    receipt: dict = {
+        "requested_provider": reviewer["provider"], "requested_model": reviewer["model"],
+        "transport": None, "status": "not-started", "toolset": _reviewer_toolset(),
+        "reported_provider": None, "reported_model": None, "identity": "unknown",
+        "identity_source": None,
+        "completed": None, "api_calls": None, "input_tokens": None, "output_tokens": None,
+        "estimated_cost_usd": None, "cost_status": None, "warnings": [],
+    }
+    _TLS.receipt = receipt
+    t0 = time.time()
+
+    def done(ok: bool, text: str, status: str) -> tuple[bool, str]:
+        receipt["status"] = status
+        receipt["elapsed_s"] = round(time.time() - t0, 1)
+        return ok, text
+
+    base = _hermes_command()
+    # No --max-turns on the inline path: `hermes -z` rejects the flag (verified),
+    # and it is unnecessary — the toolset has zero tools, and Hermes refuses an
+    # unknown toolset name outright (rc 2, "did not contain any valid toolsets")
+    # rather than falling back to the full set. The receipt's api_calls is the
+    # after-the-fact check.
+    common = ["-m", reviewer["model"], "--provider", reviewer["provider"],
+              "-t", receipt["toolset"], "--ignore-rules"]
+    env = {k: v for k, v in os.environ.items() if k.upper() not in _SCRUB_ENV}
+    env["HERMES_NONINTERACTIVE"] = "1"
+    # Hermes writes UTF-8; make any Python child (incl. test stubs) do the same,
+    # and decode as UTF-8 — the locale code page mangled em-dashes in verdicts.
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    tmpdir = tempfile.mkdtemp(prefix="devpair-")  # 0700 on POSIX
+    try:
+        usage_path = os.path.join(tmpdir, "usage.json")
+        inline = base + ["-z", prompt] + common + ["--usage-file", usage_path]
+        mode = _prompt_transport()
+        if mode == "inline" or (mode == "auto" and _fits_inline(inline)):
+            cmd, transport = inline, "inline"
+        else:
+            qpath = os.path.join(tmpdir, "prompt.txt")
+            fd = os.open(qpath, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                fh.write(prompt)
+            cmd = base + ["chat", "-Q", "--query-file", qpath, "--format", "stream-json"] \
+                + common + ["--max-turns", "1"]
+            transport = "file"
+        receipt["transport"] = transport
+        if verbose:
+            print(f"[devpair] invoking {reviewer['label']} ({reviewer['provider']}/{reviewer['model']}) "
+                  f"with {len(prompt):,} chars via {transport} transport, toolset "
+                  f"{receipt['toolset']!r}", file=sys.stderr)
+        try:
+            rc, out, err = _launch(cmd, timeout, env)
+        except subprocess.TimeoutExpired:
+            return done(False, f"reviewer timed out after {timeout}s (process tree killed)", "timeout")
+        except OSError as e:
+            if getattr(e, "winerror", None) == 206 or e.errno == errno.E2BIG:
+                return done(False, (
+                    f"the prompt ({len(prompt):,} chars) is too large for this platform's "
+                    "command line — set DEVPAIR_PROMPT_TRANSPORT=file (or prompt_transport "
+                    "in config.json) or narrow the evidence"), "too-large")
+            if isinstance(e, FileNotFoundError):
+                # `hermes` really is missing. Soft failure: the retry loop moves
+                # on (and doctor reports it) rather than dying on a traceback.
+                return done(False, f"the `hermes` CLI was not found on PATH (tried {cmd[0]!r}) "
+                                   "— is Hermes installed?", "launch-error")
+            return done(False, f"could not launch reviewer: {type(e).__name__}: {e}", "launch-error")
+        finally:
+            if transport == "file":
+                try:
+                    os.unlink(os.path.join(tmpdir, "prompt.txt"))
+                except OSError:
+                    pass
+
+        out_s, err_s = out.strip(), err.strip()
+        if transport == "file":
+            text, result = _parse_stream_json(out_s)
+            if text is None:
+                text = out_s  # a backend that ignored --format; take raw text
+            if result:
+                tok = result.get("tokens") if isinstance(result.get("tokens"), dict) else {}
+                receipt["input_tokens"] = _as_int(tok.get("input"))
+                receipt["output_tokens"] = _as_int(tok.get("output"))
+                if result.get("error"):
+                    receipt["warnings"].append(f"backend error: {str(result['error'])[:200]}")
+                code = result.get("exit_code")
+                if code not in (None, 0, "0", False):
+                    rc = rc or (_as_int(code) or 1)
+            store = _session_store_receipt(result.get("session_id") if result else None)
+            if store:
+                receipt["reported_provider"] = store.get("provider")
+                receipt["reported_model"] = store.get("model")
+                receipt["reported_base_url"] = store.get("base_url")
+                receipt["identity_source"] = "session-store"
+            else:
+                receipt["warnings"].append("file transport: no session record found — identity unknown")
+            out_s = (text or "").strip()
+        else:
+            try:
+                u = json.loads(Path(usage_path).read_text(encoding="utf-8"))
+            except Exception:
+                u = None
+            if isinstance(u, dict):
+                receipt.update({
+                    "reported_provider": u.get("provider"), "reported_model": u.get("model"),
+                    "completed": u.get("completed"), "api_calls": _as_int(u.get("api_calls")),
+                    "input_tokens": _as_int(u.get("input_tokens")),
+                    "output_tokens": _as_int(u.get("output_tokens")),
+                    "estimated_cost_usd": u.get("estimated_cost_usd"),
+                    "cost_status": u.get("cost_status"),
+                    "turn_exit_reason": u.get("turn_exit_reason"),
+                })
+                receipt["identity_source"] = "usage-file"
+                if u.get("failed") or u.get("partial") or u.get("interrupted"):
+                    receipt["warnings"].append("backend reported failed/partial/interrupted")
+        receipt["identity"] = _route_identity(reviewer["provider"], reviewer["model"],
+                                              receipt["reported_provider"], receipt["reported_model"])
+        if isinstance(receipt["api_calls"], int) and receipt["api_calls"] > 1:
+            receipt["warnings"].append(
+                f"reviewer made {receipt['api_calls']} model calls — a tool-less review "
+                "needs 1; retries or tool use. Read-only is not independently proven.")
+        if rc != 0:
+            detail = err_s or out_s or f"exit {rc} with no output"
+            return done(False, f"exit {rc}: {detail[:400]}", "failed")
+        if not out_s or "agent failed" in out_s.lower()[:200]:
+            return done(False, out_s or err_s or "no output from reviewer", "failed")
+        if receipt["completed"] is False:
+            return done(False, "backend reported the turn as not completed: "
+                               f"{receipt.get('turn_exit_reason') or 'no reason given'}", "failed")
+        return done(True, out_s, "ok")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+NON_REVIEW_MAX_CHARS = 600
+
+
+def _is_non_review(mode: str, response: str) -> bool:
+    """True for a verdict-bearing mode whose reply has no verdict AND is too
+    short to be a review. Long verdict-less reviews are kept (the gate fails
+    them closed); only obvious non-answers are treated as a failed attempt."""
+    if mode == "debug":
+        return False
+    return not _all_verdicts(response) and len((response or "").strip()) < NON_REVIEW_MAX_CHARS
+
+
+def _attempt_record(cand: dict, ok: bool, response: str) -> dict:
+    """The receipt for one backend attempt. A backend wrapper that sets no
+    receipt (a test stub, an old fork) yields identity "unknown" — never a
+    claim about which model answered."""
+    rec = dict(last_receipt() or {
+        "requested_provider": cand["provider"], "requested_model": cand["model"],
+        "transport": None, "status": "ok" if ok else "failed",
+        "reported_provider": None, "reported_model": None, "identity": "unknown",
+        "warnings": ["no backend receipt"],
+    })
+    if not ok:
+        rec["error"] = (response or "")[:300]
+    return rec
 
 
 # ---------------------------------------------------------------------------
@@ -1441,8 +2295,14 @@ def cmd_pair(args) -> int:
     # must not leave a stale CURRENT pointer behind.
     spath = session_path(args.session, create=False)
     sess = load_session(spath)
+    if args.session and sess.get("turns") and not _same_project(sess.get("project"), project_root()):
+        print(f"[devpair] WARNING: session '{spath.stem}' belongs to {sess.get('project')}, not this "
+              "project — its earlier turns will be replayed here. Use a different --session "
+              "if that is not what you want.", file=sys.stderr)
 
+    _TLS.manifest = None   # never inherit a previous run's manifest on this thread
     context, notes = gather(args)
+    manifest = last_manifest()
     for n in notes:
         print(f"[devpair] note: {n}", file=sys.stderr)
     # Remember what has already been printed, so the late-redaction pass below
@@ -1473,12 +2333,17 @@ def cmd_pair(args) -> int:
             print("fallbacks: " + ", ".join(c["label"] for c in order[1:]))
         print(f"mode     : {mode}")
         print(f"context  : {len(context):,} chars")
+        cov, gaps = coverage_status(manifest)
+        print(f"evidence : {cov}" + (f" — {len(gaps)} gap(s): " + "; ".join(gaps[:3]) if cov != "complete" else ""))
         print(f"session  : {spath.stem} (turn {len(sess.get('turns', [])) + 1})")
+        cstate, _, cproblem = _cfg_state()
+        if cstate == "invalid":
+            print(f"config   : INVALID — a real run would be refused ({cproblem})")
         cap = daily_cap()
         if cap:
             used = runs_today()
             state = "AT CAP — a real run would be refused" if used >= cap else "ok"
-            print(f"cap      : {used}/{cap} paid runs today ({state})")
+            print(f"cap      : {used}/{cap} paid attempts today ({state})")
         return 0
 
     if reviewer.get("unverifiable"):
@@ -1498,7 +2363,7 @@ def cmd_pair(args) -> int:
             file=sys.stderr,
         )
 
-    prompt = build_prompt(mode, args.ask or "", context, sess, args.focus, notes)
+    prompt = build_prompt(mode, args.ask or "", context, sess, args.focus, notes, manifest=manifest)
     # Redactions found in the question/focus/history are reported here, after
     # --dry-run's free path, so the user learns what was scrubbed before a paid
     # call goes out — not silently.
@@ -1508,10 +2373,12 @@ def cmd_pair(args) -> int:
     # Gate + record the paid run. Placed AFTER --dry-run (which is free and must
     # stay free) and BEFORE the first backend call, so nothing is spent without
     # a ledger entry and nothing exceeds the cap.
-    authorize(args, reviewer, driver, len(context))
+    authorize_ctx = len(context)
+    run_id = authorize(args, reviewer, driver, authorize_ctx)
 
     t0 = time.time()
     ok, response, used = False, "", reviewer
+    attempts: list[dict] = []
     budget = args.budget if args.budget and args.budget > 0 else None
     for i, cand in enumerate(order):
         remaining = None
@@ -1521,9 +2388,28 @@ def cmd_pair(args) -> int:
                 print(f"[devpair] wall-clock budget ({budget}s) exhausted — "
                       f"{len(order) - i} backend(s) not tried", file=sys.stderr)
                 break
+        if i > 0:
+            # Every fallback is its own paid attempt: reserved and counted.
+            reserved, why = reserve_attempt(args, cand, driver, authorize_ctx,
+                                            run_id=run_id, attempt=i + 1)
+            if not reserved:
+                print(f"[devpair] fallback to {cand['label']} not attempted — "
+                      f"{why.splitlines()[0]}", file=sys.stderr)
+                break
         this_timeout = int(min(args.timeout, remaining)) if remaining else args.timeout
+        _TLS.receipt = None  # a stale receipt must never be attributed to this attempt
         ok, response = run_reviewer(cand, prompt, this_timeout, args.verbose)
         used = cand
+        attempts.append(_attempt_record(cand, ok, response))
+        if ok and _is_non_review(mode, response):
+            # A reply with no verdict that is too short to be a review (e.g. "I'll
+            # verify a few claims first..." from a model that expected tools) is
+            # not a review. Saving it as one would replay junk into the session.
+            ok = False
+            attempts[-1]["status"] = "malformed"
+            attempts[-1]["error"] = f"no review produced ({len(response)} chars, no verdict)"
+            response = f"{cand['label']} returned no review ({len(response)} chars, no verdict): {response[:200]}"
+        record_outcome(run_id, i + 1, attempts[-1])
         if ok:
             break
         print(f"[devpair] {cand['label']} unavailable: {response[:160]}", file=sys.stderr)
@@ -1538,28 +2424,47 @@ def cmd_pair(args) -> int:
     tokens_in = estimate_tokens(prompt)
     tokens_out = estimate_tokens(response)
 
-    # The reviewer cites file:line from pasted text it cannot open — verify.
-    claim_problems = verify_claims(response, os.getcwd())
+    # The reviewer cites file:line from pasted text it cannot open — verify,
+    # including that the cited file was in the packet it was actually sent.
+    claim_problems = verify_claims(response, os.getcwd(),
+                                   packet_paths=(manifest or {}).get("paths") if manifest else None,
+                                   packet_text=context if manifest else None)
 
-    gate_fail, gate_reason = gate_failed(response)
+    gate_fail, gate_reason, coverage = gate_decision(
+        response, manifest, allow_partial=getattr(args, "allow_partial", False),
+        claim_problems=claim_problems, strict_citations=getattr(args, "strict_citations", False))
+    coverage_gaps = coverage_status(manifest)[1]
+    manifest_summary = None if not manifest else {
+        k: manifest.get(k) for k in ("complete", "gaps", "paths", "context_chars", "sha256", "total_clipped")}
 
     # A real review happened — now it is correct to pin the session pointer.
+    project = project_root()
+    pin_failed = None
     if not args.session:
-        if not CURRENT.is_file():
-            CURRENT.parent.mkdir(parents=True, exist_ok=True)
-            CURRENT.write_text(spath.stem)
-        elif CURRENT.read_text().strip() != spath.stem and not spath.is_file():
-            # Another concurrent run pinned a different session while we were
-            # reviewing. Merge our turn into THAT session rather than orphaning
-            # a same-timestamp file nobody points at.
-            spath = session_path(create=False)
-            sess = load_session(spath)
+        try:
+            with _file_lock(str(CURRENT) + ".lock"):
+                cur = _current_for(project)
+                if cur:
+                    if cur != spath.stem and not spath.is_file():
+                        # Another run in THIS project pinned a session while we were
+                        # reviewing — join it rather than orphan a file nobody points at.
+                        spath = _contained_session(cur)
+                else:
+                    if spath.exists() or spath.stem in active_session_names():
+                        # Our provisional name was taken (by another project) during
+                        # the review. Never share it: allocate a fresh one.
+                        spath = SESSIONS / f"{_new_session_name()}.json"
+                    _set_current(project, spath.stem)
+        except LockTimeout as e:
+            pin_failed = str(e)   # paid already: rescue the turn below, never crash
 
-    sess.setdefault("turns", []).append({
+    # Stored state is redacted too: outbound redaction alone left a credential
+    # typed into --ask/--focus sitting in the session JSON on disk.
+    turn = {
         "at": _now(),
         "mode": mode,
-        "ask": args.ask or "",
-        "focus": args.focus or "",
+        "ask": redact_secrets(args.ask or "")[0],
+        "focus": redact_secrets(args.focus or "")[0],
         "reviewer": f"{used['provider']}/{used['model']}",
         "driver": f"{driver['provider']}/{driver['model']}",
         "context_chars": len(context),
@@ -1569,13 +2474,25 @@ def cmd_pair(args) -> int:
         "verdict": parse_verdict(response),
         "blockers": count_blockers(response),
         "unverified_claims": claim_problems,
-        "independence": ("same-family" if used.get("same_family_as_driver")
-                         else "unverified" if used.get("unverifiable")
-                         else "verified"),
-        "response": response,
-    })
-    sess["project"] = os.getcwd()
-    save_session(spath, sess)
+        "coverage": coverage,
+        "coverage_gaps": coverage_gaps,
+        "evidence": manifest_summary,
+        "independence": (("same-family" if used.get("same_family_as_driver")
+                          else "unverified" if used.get("unverifiable")
+                          else "verified")),
+        "route": attempts[-1] if attempts else None,
+        "attempts": attempts,
+        "response": redact_secrets(response)[0],
+    }
+    sess = (_rescue_turn(spath, turn, project, pin_failed) if pin_failed
+            else append_turn(spath, turn, project))
+
+    rt0 = attempts[-1] if attempts else {}
+    if rt0.get("identity") == "reported-mismatch":
+        # Always on stderr — a --json consumer must not be able to miss it.
+        print(f"[devpair] ROUTE MISMATCH: requested {rt0.get('requested_provider')}/"
+              f"{rt0.get('requested_model')}, backend reported {rt0.get('reported_provider')}/"
+              f"{rt0.get('reported_model')}", file=sys.stderr)
 
     if args.json:
         print(json.dumps({
@@ -1591,11 +2508,16 @@ def cmd_pair(args) -> int:
             "verdict": parse_verdict(response),
             "blockers": count_blockers(response),
             "unverified_claims": claim_problems,
+            "coverage": coverage,
+            "coverage_gaps": coverage_gaps,
+            "evidence": manifest_summary,
             "independence": ("same-family" if used.get("same_family_as_driver")
                              else "unverified" if used.get("unverifiable")
                              else "verified"),
             "gate_failed": gate_fail,
             "gate_reason": gate_reason,
+            "route": attempts[-1] if attempts else None,
+            "attempts": attempts,
             "response": response,
         }, indent=2))
     else:
@@ -1604,6 +2526,17 @@ def cmd_pair(args) -> int:
         print(f"  DEV PAIR · {mode.upper()} · reviewed by {used['label']}")
         print(f"  driver: {driver['model']}   session: {spath.stem} (turn {len(sess['turns'])})   {elapsed:.0f}s")
         print(f"  ~{tokens_in:,} tokens in / ~{tokens_out:,} out")
+        rt = attempts[-1] if attempts else {}
+        if rt.get("identity") == "reported-match":
+            print(f"  route: backend reported {rt.get('reported_provider')}/{rt.get('reported_model')} "
+                  f"(matches request; {rt.get('transport')} transport)")
+        elif rt.get("identity") == "reported-mismatch":
+            print(f"  ROUTE MISMATCH: requested {rt.get('requested_provider')}/{rt.get('requested_model')}, "
+                  f"backend reported {rt.get('reported_provider')}/{rt.get('reported_model')}")
+        else:
+            print("  route: backend did not report which model answered (identity unknown)")
+        for w in rt.get("warnings") or []:
+            print(f"  WARNING: {w}")
         print(bar + "\n")
         print(response)
         print(f"\n{bar}")
@@ -1618,12 +2551,20 @@ def cmd_pair(args) -> int:
                 print(f"    · {c}")
             print("  Treat those findings with extra scepticism.")
             print(bar)
+        if coverage != "complete":
+            print(f"  EVIDENCE {coverage.upper()} — the reviewer did not see everything in scope:")
+            for g in coverage_gaps[:8]:
+                print(f"    · {g}")
+            print("  An approval here covers only what was sent.")
+            print(bar)
         print(f"  reply with: devpair followup --ask \"...\"")
         print(bar)
 
     if args.gate and gate_fail:
         print(f"\n[devpair] GATE FAILED — {gate_reason}", file=sys.stderr)
         return 2
+    if args.gate and coverage == "partial":
+        print(f"\n[devpair] GATE PASSED (PARTIAL) — {gate_reason}", file=sys.stderr)
     return 0
 
 
@@ -1644,47 +2585,100 @@ def cmd_log(args) -> int:
 
 
 def cmd_reset(args) -> int:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    CURRENT.parent.mkdir(parents=True, exist_ok=True)
-    CURRENT.write_text(stamp)
-    print(f"devpair: new pairing session {stamp}")
+    try:
+        with _file_lock(str(CURRENT) + ".lock"):
+            stamp = _new_session_name()
+            _set_current(project_root(), stamp)
+    except LockTimeout as e:
+        print(f"devpair: could not reset — the session pointer is locked ({e}).", file=sys.stderr)
+        return 1
+    print(f"devpair: new pairing session {stamp} (for this project)")
     return 0
 
 
 def cmd_doctor(args) -> int:
+    """Static by default: zero model calls. `--live` probes each backend, and
+    every probe is a reserved, counted, attested paid attempt — the old doctor
+    fanned out to every reviewer in parallel with no cap and no ledger entry."""
     driver = driver_identity(getattr(args, "driver", None))
     print(f"driver (being supervised): {driver['provider']}/{driver['model']}  family={driver['family']}")
     if driver["family"] == "unknown":
         print("  WARNING: driver family unidentified — independence cannot be proven.")
         print("  Pass --driver PROVIDER/MODEL for an accurate same-family column.")
-    print(f"state: {BASE}\n")
+    print(f"state: {BASE}")
+    rc = 0
+    cstate, _, cproblem = _cfg_state()
+    if cstate == "invalid":
+        print(f"config: INVALID — every paid run will be refused: {cproblem}")
+        rc = 1
+    else:
+        print(f"config: {cstate}" + (f" (daily cap {daily_cap()}/day)" if daily_cap() else ""))
+    cmd = _hermes_command()
+    found = shutil.which(cmd[0]) or (cmd[0] if Path(cmd[0]).exists() else None)
+    print(f"backend command: {' '.join(cmd)}" + ("" if found else "   <-- NOT FOUND"))
+    if not found:
+        rc = 1
+    print(f"reviewer toolset: {_reviewer_toolset()!r} (must resolve to ZERO tools; "
+          "`-t \"\"` would load the full CLI toolset)")
+    print(f"prompt transport: {_prompt_transport()}\n")
+
+    live = bool(getattr(args, "live", False))
     print(f"{'reviewer':<10} {'provider/model':<34} {'family':<8} status")
     print("-" * 78)
-    rc = 0
-    any_ok = False
+    if not live:
+        for key, r in REVIEWERS.items():
+            same = " (SAME FAMILY AS DRIVER — not independent)" if r["family"] == driver["family"] else ""
+            print(f"{key:<10} {r['provider'] + '/' + r['model']:<34} {r['family']:<8} "
+                  f"not probed{same}")
+        print("\nStatic check only — no model was called. `devpair doctor --live "
+              "--requested-by user` probes each backend (one paid attempt per reviewer).")
+        return rc
+
+    args.mode = "doctor"
+    run_id = _new_run_id()
+    reserved: list[tuple[str, dict, int]] = []
+    skipped: list[tuple[str, dict, str]] = []
+    for n, (key, r) in enumerate(REVIEWERS.items(), 1):
+        ok, why = reserve_attempt(args, r, driver, 0, run_id=run_id, attempt=n)
+        if ok:
+            reserved.append((key, r, n))
+        else:
+            skipped.append((key, r, why.splitlines()[0]))
 
     def _probe(item):
-        key, r = item
+        key, r, n = item
         # Small local reasoning models emit a long trace even for a trivial
         # probe (~2min), so they get a longer leash than hosted backends.
         probe_timeout = 300 if r["provider"].startswith("lmstudio") else 90
+        _TLS.receipt = None
         ok, out = run_reviewer(r, "Reply with exactly: OK", probe_timeout, False)
-        return key, r, ok, out
+        return key, r, ok, out, _attempt_record(r, ok, out), n
 
     # Probed in parallel: serially this is 4 x up-to-300s of dead waiting.
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=max(1, len(REVIEWERS))) as pool:
-        results = list(pool.map(_probe, list(REVIEWERS.items())))
+    results = []
+    if reserved:
+        with ThreadPoolExecutor(max_workers=max(1, len(reserved))) as pool:
+            results = list(pool.map(_probe, reserved))
+    # Outcomes are written from THIS thread, after the pool: on Windows
+    # msvcrt.locking retries only once per second, so threads finishing together
+    # and contending for the ledger lock serialised the whole doctor run.
+    for _key, _r, _ok, _out, rec, n in results:
+        record_outcome(run_id, n, rec)
 
-    for key, r, ok, out in results:
+    any_ok = False
+    for key, r, ok, out, rec, _n in results:
         same = " (SAME FAMILY AS DRIVER — not independent)" if r["family"] == driver["family"] else ""
         status = "OK" if ok and "OK" in out.upper()[:40] else f"FAIL: {out[:60]}"
         if ok:
             any_ok = True
-        print(f"{key:<10} {r['provider']+'/'+r['model']:<34} {r['family']:<8} {status}{same}")
+            status += f" [route {rec.get('identity')}]"
+        print(f"{key:<10} {r['provider'] + '/' + r['model']:<34} {r['family']:<8} {status}{same}")
+    for key, r, why in skipped:
+        print(f"{key:<10} {r['provider'] + '/' + r['model']:<34} {r['family']:<8} NOT PROBED: {why}")
     if not any_ok:
-        print("\nNo reviewer backend is reachable — devpair cannot run.")
+        print("\nNo reviewer backend answered a live probe — devpair cannot run.")
         rc = 1
     return rc
 
@@ -1696,6 +2690,8 @@ def cmd_audit(args) -> int:
     tells an agent not to self-initiate, and this shows whether it obeyed.
     """
     recs = read_ledger(days=args.days)
+    outcomes = {(r.get("run_id"), r.get("attempt")): r for r in recs if r.get("kind") == "outcome"}
+    recs = [r for r in recs if r.get("kind") != "outcome"]
     if not recs:
         where = "no runs recorded" if LEDGER.is_file() else f"no ledger yet at {LEDGER}"
         print(f"devpair: {where}"
@@ -1703,25 +2699,35 @@ def cmd_audit(args) -> int:
         return 0
 
     if args.json:
+        for r in recs:
+            o = outcomes.get((r.get("run_id"), r.get("attempt")))
+            if o:
+                r["outcome"] = {k: v for k, v in o.items() if k not in ("kind", "run_id", "attempt", "day", "epoch")}
         print(json.dumps({"days": args.days, "count": len(recs),
                           "runs_today": runs_today(), "daily_cap": daily_cap(),
                           "runs": recs}, indent=2))
         return 0
 
-    print(f"{'when':<22} {'mode':<9} {'requested by':<14} {'reviewer':<30} ctx")
-    print("─" * 88)
+    print(f"{'when':<22} {'mode':<9} {'requested by':<14} {'reviewer':<30} {'outcome':<14} ctx")
+    print("─" * 100)
     for r in recs:
+        o = outcomes.get((r.get("run_id"), r.get("attempt"))) or {}
+        oc = o.get("status") or ("—" if r.get("kind") == "attempt" else "(legacy)")
+        if o.get("identity") == "reported-mismatch":
+            oc += " MISMATCH"
         print(f"{r.get('at','?')[:19]:<22} {r.get('mode','?'):<9} "
               f"{r.get('requested_by','?')[:13]:<14} {r.get('reviewer','?')[:29]:<30} "
-              f"{r.get('context_chars',0):,}")
+              f"{oc[:13]:<14} {r.get('context_chars',0):,}")
 
     unattributed = [r for r in recs if r.get("requested_by") in ("", "unattributed", None)]
     cap = daily_cap()
-    print("─" * 88)
-    print(f"{len(recs)} run(s)"
+    state, _c, problem = _cfg_state()
+    print("─" * 100)
+    print(f"{len(recs)} paid attempt(s)"
           + (f" in the last {args.days}d" if args.days else "")
           + f"; {runs_today()} today"
-          + (f" of a {cap}/day cap" if cap else " (no daily cap set)"))
+          + (f" — CONFIG INVALID, every paid run is being refused ({problem})" if state == "invalid"
+             else f" of a {cap}/day cap" if cap else " (no daily cap set)"))
     if unattributed:
         print(f"\n  {len(unattributed)} run(s) named nobody as the requester.")
         print("  Unattributed runs are the ones to check — the skill forbids an")
@@ -1729,28 +2735,74 @@ def cmd_audit(args) -> int:
     return 0
 
 
+def _mtime(p: Path) -> float | None:
+    try:
+        return p.stat().st_mtime
+    except OSError:  # deleted concurrently
+        return None
+
+
 def cmd_prune(args) -> int:
-    """Housekeeping: sessions accumulate forever otherwise."""
+    """Housekeeping: sessions — and their lock/tmp/quarantine/rescue sidecars —
+    accumulate forever otherwise. --redact rewrites every kept session through
+    the redactor (legacy sessions stored --ask/--focus verbatim)."""
     if not SESSIONS.is_dir():
         print("devpair: no sessions to prune.")
         return 0
     cutoff = time.time() - (args.days * 86400)
-    current = CURRENT.read_text().strip() if CURRENT.is_file() else ""
-    files = sorted(SESSIONS.glob("*.json"), key=lambda p: p.stat().st_mtime)
-    doomed = [p for p in files if p.stat().st_mtime < cutoff and p.stem != current]
-    if not doomed:
-        print(f"devpair: nothing older than {args.days}d "
-              f"({len(files)} session(s) kept).")
-        return 0
-    for p in doomed:
+    active = active_session_names()
+    files = [(p, m) for p in SESSIONS.glob("*.json")
+             if ".turn-" not in p.name and (m := _mtime(p)) is not None]
+    files.sort(key=lambda x: x[1])
+    doomed = [p for p, m in files if m < cutoff and p.stem not in active]
+    doomed_names = {p.name for p in doomed}
+
+    def _sidecar_ok(p: Path) -> bool:
+        if p.name.endswith(".json.lock"):
+            # A lock is never aged out on its own: it is opened, never written, so
+            # its mtime is its creation time. Unlinking a lock a live holder owns
+            # lets the next writer lock a NEW inode — two "locked" writers.
+            owner = p.name[: -len(".lock")]
+            return owner in doomed_names or not (SESSIONS / owner).exists()
+        return True
+
+    side = [p for pat in ("*.json.lock", "*.json.tmp-*", "*.json.corrupt-*", "*.turn-*.json")
+            for p in SESSIONS.glob(pat)
+            if (m := _mtime(p)) is not None and m < cutoff and p not in doomed and _sidecar_ok(p)]
+    for p in doomed + side:
         if args.dry_run:
-            print(f"would delete {p.stem}")
+            print(f"would delete {p.name}")
         else:
-            p.unlink()
-            print(f"deleted {p.stem}")
+            try:
+                p.unlink()
+                print(f"deleted {p.name}")
+            except OSError as e:
+                print(f"could not delete {p.name}: {e}")
+    if getattr(args, "redact", False):
+        changed = 0
+        for p, _m in files:
+            if p in doomed or not p.exists():
+                continue
+            try:
+                with _file_lock(str(p) + ".lock"):
+                    raw = p.read_text(encoding="utf-8")
+                    try:
+                        if not isinstance(json.loads(raw), dict):
+                            raise ValueError("not a session object")
+                    except ValueError:
+                        print(f"skipped {p.name}: unparseable — not rewritten (would lose content)")
+                        continue
+                    data = load_session(p, quarantine=False)
+                    if redact_secrets(raw)[1]:
+                        if not args.dry_run:
+                            save_session(p, data)
+                        changed += 1
+            except (OSError, LockTimeout) as e:
+                print(f"could not redact {p.name}: {e}")
+        print(f"devpair: {'would redact' if args.dry_run else 'redacted'} {changed} stored session(s).")
     verb = "would free" if args.dry_run else "freed"
-    print(f"devpair: {verb} {len(doomed)} session(s); "
-          f"{len(files) - len(doomed)} kept (active session never pruned).")
+    print(f"devpair: {verb} {len(doomed)} session(s) and {len(side)} sidecar file(s) older than "
+          f"{args.days}d; {len(files) - len(doomed)} session(s) kept (active sessions never pruned).")
     return 0
 
 
@@ -1838,8 +2890,15 @@ def main() -> int:
                             "cannot burn timeout x candidates)")
         p.add_argument("--gate", action="store_true",
                        help="exit 2 if the verdict is DO NOT SHIP/NEEDS WORK/STOP/RECONSIDER, "
-                            "if any [BLOCKER] is found, or if the verdict cannot be parsed "
+                            "if any [BLOCKER] is found, if the verdict cannot be parsed, or if "
+                            "an approval rests on evidence the harness clipped or left out "
                             "(fails closed). Default: advisory, always exit 0.")
+        p.add_argument("--allow-partial", dest="allow_partial", action="store_true",
+                       help="with --gate: accept an approval on PARTIAL evidence (clipped or "
+                            "omitted sections). The result is labelled PARTIAL, never complete.")
+        p.add_argument("--strict-citations", dest="strict_citations", action="store_true",
+                       help="with --gate: fail when the reviewer cites a file:line that does not "
+                            "exist or was not in the evidence sent (default: advisory).")
         p.add_argument("--json", action="store_true", help="machine-readable output")
         p.add_argument("--dry-run", action="store_true", help="show who would review and why, without calling them")
         p.add_argument("--verbose", "-v", action="store_true")
@@ -1852,10 +2911,14 @@ def main() -> int:
     pr = sub.add_parser("reset", help="start a fresh pairing session")
     pr.set_defaults(func=cmd_reset)
 
-    pd = sub.add_parser("doctor", help="check reviewer backends")
+    pd = sub.add_parser("doctor", help="check reviewer setup (static; --live probes backends)")
     pd.set_defaults(func=cmd_doctor)
     pd.add_argument("--driver", metavar="[PROVIDER/]MODEL",
                     help="the live session model, for an accurate same-family column")
+    pd.add_argument("--live", action="store_true",
+                    help="actually call each reviewer (one PAID, capped, ledgered attempt each)")
+    pd.add_argument("--requested-by", dest="requested_by", metavar="WHO",
+                    help="who asked for the live probe (required when attestation is enforced)")
 
     pa = sub.add_parser("audit", help="who ran the pair, when, and who asked")
     pa.set_defaults(func=cmd_audit)
@@ -1868,6 +2931,9 @@ def main() -> int:
     pp.add_argument("--days", type=int, default=30,
                     help="delete sessions older than N days (default 30)")
     pp.add_argument("--dry-run", action="store_true", help="show what would go, delete nothing")
+    pp.add_argument("--redact", action="store_true",
+                    help="also rewrite every kept session through the secret redactor "
+                         "(one-time cleanup for sessions saved before redaction-at-rest)")
 
     args = ap.parse_args()
     return args.func(args)

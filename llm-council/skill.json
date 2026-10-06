@@ -1,0 +1,14 @@
+{
+  "name": "llm-council",
+  "version": "1.0.0",
+  "category": "autonomous-ai-agents",
+  "description": "Multi-model council deliberation that preserves dissent; protocol + hermes-council runtime patches.",
+  "needs_reviewer_config": false,
+  "skill_files": [
+    "README.md",
+    "plugin-patch/0001-devpair-convergence-phases-5-6-premise-confidence-fl.patch",
+    "plugin-patch/0002-docs-compact-vs-strict-protocol-table-exact-call-cou.patch",
+    "plugin-patch/0003-council-review-fixes-GLM-5.3-failed-corrective-retry.patch"
+  ],
+  "next_step": "optional runtime upgrade: see README.md 'Upgrading the hermes-council plugin'"
+}

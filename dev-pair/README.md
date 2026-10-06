@@ -26,7 +26,7 @@ It is **supervision, not duplication**: the reviewer never writes code, never ed
        │   questions / alternatives)                 └─────────┬────────────┘
        │                                                       │
        │                                             hermes -z PROMPT -m MODEL
-       │                                             --provider P  -t ""   ← no tools
+       │                                             --provider P -t context_engine  ← zero tools
        │                                                       ▼
        │                                             ┌──────────────────────┐
        └─────────────────────────────────────────────│  REVIEWER model       │
@@ -37,7 +37,7 @@ It is **supervision, not duplication**: the reviewer never writes code, never ed
 
 Three design decisions do the heavy lifting:
 
-1. **Read-only reviewer.** The reviewer is invoked as `hermes -z "<prompt>" -m <model> --provider <provider> -t ""`. The `-t ""` strips all tools, so the reviewer cannot read your disk, run commands, or edit anything. It only sees the text the harness puts in the prompt.
+1. **Read-only reviewer.** The reviewer is invoked as `hermes -z "<prompt>" -m <model> --provider <provider> -t context_engine --ignore-rules` — an explicit toolset that resolves to zero tools — so it cannot read your disk, run commands, or edit anything, and never receives your SOUL/memory/AGENTS.md. It only sees the text the harness puts in the prompt. (Up to 1.1.22 it used `-t ""`, which Hermes reads as "all configured tools" — upgrade.)
 2. **Same-family refusal.** The tool identifies the driver model, and refuses to pick a reviewer from the same model family — it would rather exit with an error naming why each candidate was skipped than silently let a model grade its own homework. (`--reviewer` exists as a deliberate override with a loud warning.)
 3. **Session memory.** Reviews happen in persistent sessions (`<hermes-home>/devpair/sessions/*.json`). When you act on a review and call `followup`, the reviewer sees what it said before — it notices concerns you silently dropped, escalates ones you ignored, and concedes when your reasoning beat its. That's what makes it a *pair* instead of a linter.
 
@@ -60,10 +60,11 @@ irm https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/inst
 That detects your Hermes home (`%LOCALAPPDATA%\hermes` on Windows), installs the
 skill and its code, writes the `devpair` CLI — a `.cmd` shim on Windows, an
 interpreter-chain script on POSIX — generates a reviewer roster from **your**
-configured providers, and runs the 58-test suite as an install gate. Then:
+configured providers, and runs the test suite as an install gate. Then:
 
 ```bash
-devpair doctor          # confirm your backends answer
+devpair doctor          # static check — free, calls no model
+devpair doctor --live --requested-by user   # paid: probe each backend
 ```
 
 > Piping a remote script into an interpreter means trusting the source.
@@ -82,7 +83,7 @@ devpair doctor          # confirm your backends answer
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 366 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 563 checks, no network
 ```
 
 ### Configuration
@@ -177,8 +178,8 @@ much you can trust them:
 
 | Mechanism | What it does | Evadable by an agent? |
 |---|---|---|
-| `daily_cap` | Hard ceiling on paid runs per day — the process refuses, no backend is called | **No** |
-| Invocation ledger | Every paid run appended before the call: when, mode, reviewer, who asked | No (records only) |
+| `daily_cap` | Hard ceiling on paid ATTEMPTS per day (fallbacks and live doctor probes count); an invalid config refuses every paid run | **No** |
+| Invocation ledger | Every attempt reserved before the call (when, mode, reviewer, who asked) plus an outcome record (status, reported route) | No (records only) |
 | `--requested-by WHO` | Names who asked for this run | Yes — it is an attestation |
 
 ```bash
@@ -342,7 +343,8 @@ Verdicts: `SHIP` / `SHIP AFTER FIXES` / `NEEDS WORK` / `DO NOT SHIP` for reviews
 ### Utility commands
 
 ```bash
-devpair doctor    # live-probe every reviewer backend, flag same-family ones
+devpair doctor    # static: config, roster, toolset, same-family flags (free)
+devpair doctor --live --requested-by user   # paid probe of each backend
 devpair log       # replay what the pair has said this session
 devpair reset     # fresh session (do this per feature — stale context pollutes)
 ```
@@ -377,9 +379,16 @@ echo $?     # 0 = pass, 2 = gate failed, 1 = no backend answered
 |---|---|
 | `0` | Verdict was SHIP / SHIP AFTER FIXES / PROCEED / PROCEED WITH CHANGES, no blockers |
 | `1` | No reviewer backend answered (infrastructure failure) |
-| `2` | Gate failed: verdict was DO NOT SHIP / NEEDS WORK / STOP / RECONSIDER, **or** a `[BLOCKER]` was found under an otherwise-passing verdict, **or** the verdict could not be parsed, **or** the review gave two different verdicts |
+| `2` | Gate failed: verdict was DO NOT SHIP / NEEDS WORK / STOP / RECONSIDER, **or** a `[BLOCKER]` was found under an otherwise-passing verdict, **or** the verdict could not be parsed, **or** the review gave two different verdicts, **or** the approval rests on evidence the harness clipped or left out (unless `--allow-partial`), **or** coverage is unknown |
 
-Those last two are deliberate: a gate that cannot read the answer — or cannot
+**Coverage is decided by the harness, not the reviewer.** Every run records what
+was actually sent — truncated sections, omitted files and why, failed `git` calls,
+and a sha256 of the packet — and the reviewer is told about the gaps. A reviewer
+saying "I saw everything" cannot override it. `--allow-partial` accepts a partial
+approval deliberately and labels it PARTIAL (stderr and `--json` `coverage`).
+`--strict-citations` also fails the gate on a `file:line` outside the packet.
+
+The verdict rules are deliberate too: a gate that cannot read the answer — or cannot
 tell which of two contradictory verdicts was meant — must not report success. A
 verdict restated identically is not a conflict, so a model that summarises its
 own conclusion at the end does not trip it. Recommended shape for CI — gate on the mechanical tier (tests, lint,
@@ -389,13 +398,15 @@ measured its precision on your own codebase.
 ### Verifying the reviewer's claims
 
 The reviewer cites `file:line` from text it was handed — it cannot open your
-files, so those anchors are claims. devpair checks every one against the real
-tree and prints anything that doesn't hold up:
+files, so those anchors are claims. devpair checks every one against the
+evidence it actually sent (and against the real tree) and prints anything that
+doesn't hold up:
 
 ```
   UNVERIFIED CLAIMS — the reviewer cited anchors that do not check out:
     · router.py:412 — file has only 380 lines
     · imaginary.py:5 — no such file in this tree
+    · settings.py:20 — not in the evidence sent to the reviewer
   Treat those findings with extra scepticism.
 ```
 
@@ -403,10 +414,13 @@ tree and prints anything that doesn't hold up:
 
 ```bash
 devpair prune --days 30 --dry-run    # see what would go
-devpair prune --days 30              # delete sessions older than 30 days
+devpair prune --days 30              # delete sessions older than 30 days (+ stale sidecars)
+devpair prune --redact               # one-time: rewrite stored sessions through the redactor
 ```
 
-The active session is never pruned, regardless of age.
+Active sessions are never pruned, regardless of age, and a live session's lock
+file is never removed. Sessions are per project: the implicit session belongs to
+the current git top-level, so another project never replays it.
 
 ## Safety model
 
@@ -425,7 +439,8 @@ The active session is never pruned, regardless of age.
 |---|---|---|
 | `no independent reviewer available` | Every configured reviewer shares the driver's family | Configure a second model family, pass correct `--driver`, or force `--reviewer` accepting the weaker review |
 | `cannot identify the driver's model family` | Model name is an alias and the provider is unrecognised | Pass `--driver PROVIDER/MODEL` with the real model; this refusal is deliberate (fail-closed) |
-| doctor FAILs on a backend | Auth or provider config | `hermes -z "hi" -m MODEL --provider P -t ""` directly to see the real error |
+| doctor --live FAILs on a backend | Auth or provider config | `hermes -z "hi" -m MODEL --provider P -t context_engine --ignore-rules` directly to see the real error (never `-t ""` — that loads every tool) |
+| `config.json is invalid` refusal | Config present but malformed | Fix the JSON / types; an invalid config is never treated as "no limits" |
 | Local model times out | Small reasoning models think for ~2 min before answering | `--timeout 900`; doctor already allows 300s for local backends |
 | Review reads like generic advice | No evidence was attached | Always pass `--diff`, `--files`, `--plan`, or `--error` |
 | `followup` warns about no earlier turns | Wrong session, or `reset` too recently | `devpair log` to find the right session; `--session NAME` to select it |
@@ -435,14 +450,14 @@ The active session is never pruned, regardless of age.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 69 regression tests (366 checks), no network required
+python3.11 test_devpair.py     # 99 regression tests (563 checks), no network required
 ```
 
-The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, and truncation maths. Run it after any change.
+The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, truncation maths, the zero-tool launch and file transport, route receipts, process-tree timeouts, tri-state enforcement and per-attempt reservations, session containment/locking/redaction, and the coverage-aware gate. Run it after any change, with `DEVPAIR_HERMES_CMD` pointed at a stub so nothing can reach a real backend.
 
 ## Version & history
 
-Current: **1.1.22**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.2.0**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

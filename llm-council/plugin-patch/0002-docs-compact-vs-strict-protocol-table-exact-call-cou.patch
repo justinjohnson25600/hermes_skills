@@ -1,0 +1,107 @@
+From 57aa302615baf94356380a74a1c2f1ac112dc564 Mon Sep 17 00:00:00 2001
+From: Hermes maildesk <maildesk@local>
+Date: Tue, 6 Oct 2026 18:23:07 +0100
+Subject: [PATCH 2/3] docs: compact vs strict protocol table, exact call
+ counts, privacy/tool boundary, skill-vs-runtime honesty section
+
+---
+ README.md                   | 32 ++++++++++++++++++++++++++++++--
+ skills/llm-council/SKILL.md | 22 ++++++++++++++++++++++
+ 2 files changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/README.md b/README.md
+index 455d9b4..1188437 100644
+--- a/README.md
++++ b/README.md
+@@ -88,9 +88,36 @@ council:
+       judge: {provider: "", model: "", enabled: true}   # empty = peer review
+       chairman: {provider: qwen, model: qwen3.8-max}
+       lite: false                                        # true = skip Stage 2
++      protocol: compact                                  # compact (default) | strict — see below
++      max_calls: 0                                       # strict-mode call budget; 0 = none
+       enabled: true
+ ```
+ 
++### Review protocol: `compact` (default) vs `strict` (opt-in)
++
++| | compact | strict |
++|---|---|---|
++| Labels | fixed seat order → Response A, B, C… | shuffled per deliberation |
++| Who reviews | every member reviews ALL answers, its own included | no member ever reviews its own answer (or the judge reviews all) |
++| Ranking parse | lenient (numbered lines, else bare `Response X` mentions) | complete permutation of the labels shown, or **one** corrective retry, then the review is **discarded** and counted as a failure |
++| Stakes | `MATERIAL FLAW:` lines requested | a `MATERIAL FLAW:` line or `No material flaws found.` is **required** |
++| Aggregation | average rank (omitted label = worst+1) | first-place votes first, average rank as tie-break, averaged only over reviewers shown the label |
++| Calls | `2N+1` with peer review | up to `N + 2N + 1` (each review may retry once); with `max_calls` set and too small, strict **downgrades visibly** to compact |
++
++Strict is not "fresh reviewers": Stage-2 reviewers are still the Stage-1 seats,
++just never on their own answer. Both protocols, at no extra calls: members check
++the premise and end with `Confidence:` + `Flip condition:`; reviewers write
++stake-weighted `MATERIAL FLAW:` lines, which the chairman's guidance keeps
++**regardless of ranking**; the chairman is asked to reconcile consensus, dissent,
++failures, confidence, the strongest flip condition and one falsifier; and the
++guidance carries a call summary (calls made, valid rankings, failures).
++
++**Privacy:** every member, reviewer and judge message, and the chairman guidance,
++pass through Hermes' fail-closed egress scrub (`agent.redact.redact_for_egress`)
++before leaving the process. The chairman's own conversation is sent like any
++normal model turn. Members and reviewers never receive tools; only the chairman
++can act — unlike dev-pair, whose single reviewer is permanently tool-less.
++
+ ## Use it
+ 
+ Three surfaces, one engine:
+@@ -109,7 +136,8 @@ Recent deliberations land in `~/.hermes/council/runs/` and show in the panel.
+ ## Cost
+ 
+ Per deliberation: `N+1` calls with `lite: true` (N seat answers + chairman), up to
+-`2N+1` with peer review. As a session model, the fan-out runs **once per user turn**;
++`2N+1` with compact peer review, up to `3N+1` with strict peer review (or `N+3`
++with a judge). As a session model, the fan-out runs **once per user turn**;
+ tool-loop iterations reuse the cached guidance and only re-call the chairman. Every
+ stage has hard wall-clock deadlines — a wedged model is dropped with a failure note,
+ never hangs your turn.
+@@ -133,7 +161,7 @@ de-anonymizes: `Response A (First-Principles Analyst (qwen:qwen3.8-max))`.
+ 
+ ```bash
+ hermes plugins validate ~/.hermes/plugins/hermes-council   # manifest, security scan, desktop surface
+-cd tests && HERMES_HOME=/tmp/council-test pytest -q        # 35 tests (engine, config, anonymity guards)
++cd tests && HERMES_HOME=/tmp/council-test pytest -q        # 53 tests (engine, config, anonymity guards, crossover + strict protocol)
+ ```
+ 
+ ## Credits
+diff --git a/skills/llm-council/SKILL.md b/skills/llm-council/SKILL.md
+index 6c992da..4cfe4ca 100644
+--- a/skills/llm-council/SKILL.md
++++ b/skills/llm-council/SKILL.md
+@@ -13,6 +13,28 @@ Convene a council of independent AI advisors to deliberate on a question, then s
+ 
+ (Sources and design rationale: see the repository README.)
+ 
++## This protocol vs the installed `council` runtime
++
++This page is the protocol an agent runs itself with subagents. The plugin's
++runtime (the `council` provider / `council_deliberate` tool / `/council`) is an
++approximation, and you must not claim more than it does:
++
++- **compact** (default): members review ALL anonymised answers **including their
++  own**; labels follow seat order; rankings parse leniently; aggregation is by
++  average rank. This is cheaper but is NOT "fresh independent reviewers".
++- **strict** (`protocol: strict`, opt-in): labels shuffled per deliberation, no
++  member reviews its own answer, complete rankings required (one corrective
++  retry, then discarded and counted), stakes statement required, first-place
++  votes before average rank. Reviewers are still Stage-1 seats, not fresh
++  subagents — say "self-excluded peer review", not "fresh reviewers".
++- Both: members state Confidence + Flip condition; `MATERIAL FLAW:` lines are kept
++  in the chairman guidance regardless of ranking; outbound text is redacted;
++  members/reviewers have no tools; only the chairman acts.
++
++When the user needs the full protocol below (fresh reviewers, the user's own
++position entered anonymously), run it yourself with subagents rather than
++claiming the runtime did.
++
+ ## When NOT to Use
+ 
+ - Simple factual lookups or mechanical tasks — a council adds cost, not accuracy.
+-- 
+2.53.0.windows.3
+

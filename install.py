@@ -301,6 +301,21 @@ def install(skill: str, dry: bool, run_verify: bool) -> int:
         (skills_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
         log(f"skill installed: {skills_dir / 'SKILL.md'}")
 
+    # skill_files: supporting docs/patches that live BESIDE SKILL.md (references/,
+    # plugin patches), as opposed to `files`, which go to the state dir.
+    for f in manifest.get("skill_files", []):
+        body = fetch(f"{skill}/{f}")
+        if body is None:
+            log(f"MISSING skill file declared in skill.json: {f}")
+            return 1
+        dest = skills_dir / f
+        if dry:
+            log(f"DRY-RUN would write {dest}")
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(body, encoding="utf-8")
+        log(f"skill file: {dest}")
+
     files = manifest.get("files", [])
     if not files:
         log("markdown-only skill — nothing else to install.")

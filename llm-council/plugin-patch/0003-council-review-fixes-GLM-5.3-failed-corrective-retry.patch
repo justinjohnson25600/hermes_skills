@@ -1,0 +1,287 @@
+From 46fd1a8159a5c09b8c6ef301d96eac383be54b5b Mon Sep 17 00:00:00 2001
+From: Hermes maildesk <maildesk@local>
+Date: Tue, 6 Oct 2026 18:25:21 +0100
+Subject: [PATCH 3/3] council review fixes (GLM-5.3): failed corrective retry
+ salvages attempt 1 (spend + flaws); recursive egress redaction (tool results,
+ nested parts, tool-call args); MATERIAL FLAW parsing tolerates
+ bold/numbered/quoted lines; case-insensitive marker search on the original
+ text; fan-out budget skips review term under lite and coerces strictly;
+ strict self-exclusion skipped below 3 answers; per-seat call counts in
+ receipts
+
+---
+ council_loop.py              | 100 +++++++++++++++++++++++------------
+ tests/test_council_strict.py |  81 +++++++++++++++++++++++++++-
+ 2 files changed, 146 insertions(+), 35 deletions(-)
+
+diff --git a/council_loop.py b/council_loop.py
+index 2b45fc8..9d10db1 100644
+--- a/council_loop.py
++++ b/council_loop.py
+@@ -415,11 +415,11 @@ def parse_ranking_strict(text: Any, labels: list[str]) -> list[str] | None:
+     fallback, no partial or padded rankings. None when invalid."""
+     if not isinstance(text, str):
+         return None
+-    marker = text.upper().rfind("FINAL RANKING:")
+-    if marker < 0:
++    markers = list(re.finditer(r"FINAL RANKING:", text, re.IGNORECASE))
++    if not markers:
+         return None
+     got: list[str] = []
+-    for line in text[marker:].splitlines()[1:]:
++    for line in text[markers[-1].start():].splitlines()[1:]:
+         if not line.strip():
+             continue
+         match = _RANK_LINE_RE.match(line)
+@@ -429,7 +429,8 @@ def parse_ranking_strict(text: Any, labels: list[str]) -> list[str] | None:
+     return got if sorted(got) == sorted(labels) and len(set(got)) == len(got) else None
+ 
+ 
+-_MATERIAL_FLAW_RE = re.compile(r"^\s*[-*]?\s*MATERIAL FLAW:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
++_MATERIAL_FLAW_RE = re.compile(
++    r"^[\s>#*\-+\d.)]*\**\s*MATERIAL FLAW\s*\**\s*:\s*\**\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+ _NO_FLAWS_RE = re.compile(r"no material flaws found", re.IGNORECASE)
+ 
+ 
+@@ -457,24 +458,38 @@ def aggregate_first_place(rankings: list[list[str]], all_labels: list[str]) -> l
+     return rows
+ 
+ 
++# Structural keys whose values are identifiers, never free text.
++_EGRESS_KEEP_KEYS = frozenset({"role", "type", "id", "tool_call_id", "tool_use_id", "name",
++                               "cache_control", "media_type", "index"})
++
++
++def _redact_obj(obj: Any) -> Any:
++    if isinstance(obj, str):
++        return _redact_for_egress(obj)
++    if isinstance(obj, list):
++        return [_redact_obj(x) for x in obj]
++    if isinstance(obj, tuple):
++        return tuple(_redact_obj(x) for x in obj)
++    if isinstance(obj, dict):
++        return {k: (v if k in _EGRESS_KEEP_KEYS else _redact_obj(v)) for k, v in obj.items()}
++    return obj
++
++
+ def _egress_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+-    """Redact every text part bound for a member/reviewer/judge (remote calls
+-    that never needed the raw secret). Copies; the caller's transcript is untouched."""
+-    out: list[dict[str, Any]] = []
+-    for message in messages:
+-        m = dict(message)
+-        content = m.get("content")
+-        if isinstance(content, str):
+-            m["content"] = _redact_for_egress(content)
+-        elif isinstance(content, list):
+-            parts = []
+-            for part in content:
+-                if isinstance(part, dict) and isinstance(part.get("text"), str):
+-                    part = {**part, "text": _redact_for_egress(part["text"])}
+-                parts.append(part)
+-            m["content"] = parts
+-        out.append(m)
+-    return out
++    """Redact EVERY free-text value bound for a member/reviewer/judge — message
++    content at any nesting depth (OpenAI parts, Anthropic tool_result blocks,
++    tool-call arguments). Copies; the caller's transcript is untouched."""
++    return [_redact_obj(dict(message)) for message in messages]
++
++
++def _as_budget(value: Any) -> int:
++    """max_calls as a non-negative int; anything else (bool, junk) means no budget."""
++    if isinstance(value, bool):
++        return 0
++    try:
++        return max(0, int(value))
++    except (TypeError, ValueError):
++        return 0
+ 
+ 
+ def _reported_model(response: Any) -> str | None:
+@@ -562,9 +577,15 @@ def _run_strict_reviewer(slot: dict[str, Any], task: str, review_messages: list[
+         )
+         retry = list(review_messages) + [{"role": "assistant", "content": text},
+                                          {"role": "user", "content": fix}]
+-        text, acct, reported = _run_reviewer(slot, task, retry, **opts)
+-        accts.append(acct)
+         calls += 1
++        try:
++            text2, acct2, reported2 = _run_reviewer(slot, task, retry, **opts)
++        except Exception as exc:
++            # Attempt 1 was real and billed, and its flaws still count: salvage it.
++            return {"text": text, "accountings": accts, "ranking": None, "reported": reported,
++                    "calls": calls, "error": f"corrective retry failed: {exc}"}
++        text, reported = text2, reported2
++        accts.append(acct2)
+         ranking = parse_ranking_strict(text, labels)
+         if ranking is not None and not _stakes_stated(text):
+             ranking = None
+@@ -719,11 +740,13 @@ class CouncilChatCompletions:
+             # Preflight the worst case: members + (judge or one review per member)
+             # x2 for the corrective retry + the chairman. Downgrade VISIBLY rather
+             # than silently multiplying calls past the configured budget.
+-            planned = len(members) + (1 if judge is not None else len(members)) * 2 + 1
+-            max_calls = preset.get("max_calls")
+-            if isinstance(max_calls, int) and max_calls > 0 and planned > max_calls:
+-                failures.append(f"strict protocol downgraded to compact: needs up to {planned} "
+-                                f"calls, max_calls is {max_calls}")
++            reviews_planned = 0 if preset.get("lite") else (1 if judge is not None else len(members))
++            planned = len(members) + reviews_planned * 2 + 1
++            max_calls = _as_budget(preset.get("max_calls"))
++            if max_calls and planned > max_calls:
++                failures.append(f"strict protocol downgraded to compact: its fan-out needs up to "
++                                f"{planned} calls (members, reviews with one retry each, first "
++                                f"chairman call), max_calls is {max_calls}")
+                 protocol = "compact"
+ 
+         # ---- Stage 1: members answer in parallel ----
+@@ -737,7 +760,7 @@ class CouncilChatCompletions:
+             ok = not isinstance(result, (BaseException, str))
+             receipts.append({"stage": "member", "seat": label,
+                              "requested": f"{slot.get('provider')}/{slot.get('model')}",
+-                             "reported_model": result[2] if ok else None, "ok": ok})
++                             "reported_model": result[2] if ok else None, "ok": ok, "calls": 1})
+             if isinstance(result, BaseException):
+                 logger.warning("Council member %s failed: %s", label, result)
+                 failures.append(f"{label} [failed: {result}]")
+@@ -769,6 +792,11 @@ class CouncilChatCompletions:
+             and len(answers) >= 2
+             and not any(f.endswith(_INTERRUPTED_NOTE) for f in failures)
+         )
++        if run_stage2 and protocol == "strict" and judge is None and len(answers) < 3:
++            # With two answers each self-excluded reviewer sees ONE response, and
++            # the chairman (who knows the seats) could name every author.
++            failures.append("strict peer review skipped: needs at least 3 answers without a judge")
++            run_stage2 = False
+         if run_stage2:
+             if judge is not None:
+                 self._emit("council.phase", phase="review", members_done=len(answers),
+@@ -809,19 +837,23 @@ class CouncilChatCompletions:
+                 if protocol == "strict":
+                     text, ranking = result["text"], result["ranking"]
+                     accountings.extend(result["accountings"])
+-                    stage2_calls += result["calls"]
++                    seat_calls = result["calls"]
+                     reported = result["reported"]
+-                    if ranking is None:
++                    if result.get("error"):
++                        failures.append(f"{reviewer_label} ({task}) [{result['error']}; first "
++                                        "attempt kept for its flaws, ranking discarded]")
++                    elif ranking is None:
+                         failures.append(f"{reviewer_label} ({task}) [discarded: invalid ranking or no "
+-                                        f"stakes statement after {result['calls']} attempt(s)]")
++                                        f"stakes statement after {seat_calls} attempt(s)]")
+                 else:
+                     text, acct, reported = result
+                     accountings.append(acct)
+-                    stage2_calls += 1
++                    seat_calls = 1
+                     ranking = parse_ranking(text)
++                stage2_calls += seat_calls
+                 receipts.append({"stage": task, "seat": reviewer_label,
+                                  "requested": f"{slot.get('provider')}/{slot.get('model')}",
+-                                 "reported_model": reported, "ok": True})
++                                 "reported_model": reported, "ok": True, "calls": seat_calls})
+                 if ranking:
+                     rankings.append(ranking)
+                 reviews.append({"reviewer_label": reviewer_label, "text": text, "ranking": ranking or [],
+diff --git a/tests/test_council_strict.py b/tests/test_council_strict.py
+index 2680560..971ac76 100644
+--- a/tests/test_council_strict.py
++++ b/tests/test_council_strict.py
+@@ -250,7 +250,8 @@ def test_strict_call_budget_downgrades_visibly(council_home, monkeypatch):
+     calls = _install(monkeypatch)
+     facade = _facade()
+     guidance = facade.prepare(messages=[{"role": "user", "content": "q"}])["guidance"]
+-    assert "strict protocol downgraded to compact: needs up to 10 calls, max_calls is 5" in guidance
++    assert "strict protocol downgraded to compact: its fan-out needs up to 10 calls" in guidance
++    assert "max_calls is 5" in guidance
+     assert facade._council_cache_state["protocol"] == "compact"
+     reviews = [c for c in calls if c["task"] == "council_review"]
+     assert all(f"answer by {c['model']}" in _all_text(c) for c in reviews)  # compact shape
+@@ -272,3 +273,81 @@ def test_config_normalises_protocol_and_budget():
+     assert _normalize_preset({"protocol": "weird"})["protocol"] == "compact"
+     assert _normalize_preset({"max_calls": "12"})["max_calls"] == 12
+     assert _normalize_preset({"max_calls": -3})["max_calls"] == 0
++
++
++# --- round 4 (GLM-5.3 review of the council change) ---------------------------------
++
++def test_strict_retry_that_raises_keeps_attempt_one(council_home, monkeypatch):
++    _write_config(council_home, protocol="strict")
++    calls: list[dict] = []
++    per: dict[str, int] = {}
++
++    def fake(**kw):
++        calls.append(kw)
++        task, model = kw.get("task"), str(kw.get("model") or "")
++        if task == "council_member":
++            return _response(f"answer by {model}")
++        if task == "council_review":
++            per[model] = per.get(model, 0) + 1
++            if per[model] == 1:
++                return _response("MATERIAL FLAW: Response A drops writes on crash — blocks ship.\nno ranking")
++            raise RuntimeError("network gone")
++        return _response("chairman")
++
++    monkeypatch.setattr("agent.auxiliary_client.call_llm", fake)
++    facade = _facade()
++    guidance = facade.prepare(messages=[{"role": "user", "content": "q"}])["guidance"]
++    state = facade._council_cache_state
++    assert state["summary"]["stage2_calls"] == 6, "3 seats x (attempt + failed retry) — all counted"
++    assert "drops writes on crash" in guidance, "attempt 1's material flaw must survive a failed retry"
++    assert sum("corrective retry failed" in f for f in state["failures"]) == 3
++    assert all(r.get("calls") == 2 for r in state["receipts"] if r["stage"] == "council_review")
++
++
++@pytest.mark.parametrize("line", [
++    "**MATERIAL FLAW:** Response B leaks a token — blocks release",
++    "1. MATERIAL FLAW: Response B leaks a token — blocks release",
++    "> MATERIAL FLAW: Response B leaks a token — blocks release",
++    "- **MATERIAL FLAW**: Response B leaks a token — blocks release",
++])
++def test_material_flaw_lines_as_models_write_them(line):
++    from hermes_council.council_loop import material_flaws
++    got = material_flaws("Review prose.\n" + line + "\nFINAL RANKING:\n1. Response A")
++    assert got and "leaks a token" in got[0]
++
++
++def test_egress_redacts_nested_tool_results_and_arguments():
++    from hermes_council.council_loop import _egress_messages
++    msgs = [
++        {"role": "assistant", "content": None, "tool_calls": [
++            {"id": "call_1", "type": "function",
++             "function": {"name": "terminal", "arguments": f'{{"cmd": "export K={SECRET}"}}'}}]},
++        {"role": "tool", "tool_call_id": "call_1", "content": f"K={SECRET}"},
++        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
++                                      "content": [{"type": "text", "text": f"token {SECRET}"}]}]},
++    ]
++    out = _egress_messages(msgs)
++    import json as _json
++    assert SECRET not in _json.dumps(out)
++    assert out[0]["tool_calls"][0]["id"] == "call_1" and out[1]["tool_call_id"] == "call_1"
++    assert out[2]["content"][0]["tool_use_id"] == "t1"
++    assert SECRET in _json.dumps(msgs), "the caller's transcript is not mutated"
++
++
++def test_strict_budget_boundary_and_lite(council_home, monkeypatch):
++    _write_config(council_home, protocol="strict", max_calls=10)  # 3 + 3*2 + 1 == 10
++    _install(monkeypatch)
++    facade = _facade()
++    facade.prepare(messages=[{"role": "user", "content": "q"}])
++    assert facade._council_cache_state["protocol"] == "strict"
++    from hermes_council.council_loop import _as_budget
++    assert _as_budget(True) == 0 and _as_budget("7") == 7 and _as_budget("x") == 0 and _as_budget(-2) == 0
++
++
++def test_strict_with_two_answers_skips_peer_review(council_home, monkeypatch):
++    _write_config(council_home, protocol="strict", members=2)
++    calls = _install(monkeypatch)
++    facade = _facade()
++    guidance = facade.prepare(messages=[{"role": "user", "content": "q"}])["guidance"]
++    assert [c["task"] for c in calls].count("council_review") == 0
++    assert "strict peer review skipped: needs at least 3 answers without a judge" in guidance
+-- 
+2.53.0.windows.3
+

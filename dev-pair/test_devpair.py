@@ -19,6 +19,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import devpair  # noqa: E402
 
+# NO-NETWORK GUARD. The suite is run directly by install.py (on every fleet box)
+# and by check_consistency.py — not only by a harness that stubs the backend.
+# A test that launches the reviewer without its own stub used to reach the REAL
+# `hermes`, and Hermes can fall back to a working provider even for an invalid
+# one, so that was a live paid call. Every reviewer launch from this suite now
+# defaults to a local process that exits 7; tests that need behaviour install
+# their own stub via _env(DEVPAIR_HERMES_CMD=...). The user's own override is
+# replaced too — a test run must never spend, whatever the environment says.
+_REAL_HERMES_CMD = os.environ.get("DEVPAIR_HERMES_CMD")
+NO_NETWORK_STUB = f'"{sys.executable}" -c "raise SystemExit(7)"'
+os.environ["DEVPAIR_HERMES_CMD"] = NO_NETWORK_STUB
+
 PASS, FAIL = [], []
 
 
@@ -52,6 +64,89 @@ def isolated(fn):
 def set_driver(model, provider="zai"):
     os.environ["DEVPAIR_DRIVER_MODEL"] = model
     os.environ["DEVPAIR_DRIVER_PROVIDER"] = provider
+
+
+class _env:
+    """Temporarily set (or with None, unset) environment variables."""
+    def __init__(self, **kv):
+        self.kv, self.prev = kv, {}
+
+    def __enter__(self):
+        for k, v in self.kv.items():
+            self.prev[k] = os.environ.get(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self.prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return False
+
+
+def _argv_stub(base, reply="## VERDICT\nPROCEED\nok", usage=None, sleep=0, name="_argv_stub",
+               session_id=None, result_exit=0, usage_raw=None, spawn_child=False):
+    """A reviewer backend stub for DEVPAIR_HERMES_CMD. Records its argv and the
+    HERMES_* env it received, writes `usage` (or `usage_raw` verbatim) to the
+    --usage-file it was given, and answers a --query-file run in stream-json
+    echoing the prompt's tail and length so tests can prove the whole prompt
+    arrived. spawn_child=True starts a grandchild that heartbeats a file, so a
+    test can see whether the whole process TREE died. Never touches a network."""
+    impl = Path(base) / f"{name}.py"
+    log = Path(base) / f"{name}.argv.json"
+    envlog = Path(base) / f"{name}.env.json"
+    beat = Path(base) / f"{name}.beat"
+    impl.write_text(
+        "import sys, os, json, time, pathlib, subprocess\n"
+        "a = sys.argv[1:]\n"
+        f"pathlib.Path({str(log)!r}).write_text(json.dumps(a), encoding='utf-8')\n"
+        f"pathlib.Path({str(envlog)!r}).write_text(json.dumps({{k: v for k, v in os.environ.items() if k.startswith('HERMES_')}}), encoding='utf-8')\n"
+        f"if {spawn_child!r}:\n"
+        "    code = ('import time, pathlib\\n'\n"
+        f"            'p = pathlib.Path(' + repr({str(beat)!r}) + ')\\n'\n"
+        "            'while True:\\n'\n"
+        "            '    p.write_text(str(time.time()))\\n'\n"
+        "            '    time.sleep(0.1)\\n')\n"
+        "    subprocess.Popen([sys.executable, '-c', code])\n"
+        f"time.sleep({sleep!r})\n"
+        f"usage = {usage!r}\n"
+        f"usage_raw = {usage_raw!r}\n"
+        "if '--usage-file' in a:\n"
+        "    up = pathlib.Path(a[a.index('--usage-file') + 1])\n"
+        "    if usage_raw is not None:\n"
+        "        up.write_text(usage_raw, encoding='utf-8')\n"
+        "    elif usage is not None:\n"
+        "        up.write_text(json.dumps(usage), encoding='utf-8')\n"
+        f"reply = {reply!r}\n"
+        "if '--query-file' in a:\n"
+        "    q = pathlib.Path(a[a.index('--query-file') + 1]).read_text(encoding='utf-8')\n"
+        "    reply = reply + ' TAIL=' + q[-12:] + ' LEN=' + str(len(q))\n"
+        "    print(json.dumps({'type': 'system', 'subtype': 'init', 'model': 'm'}))\n"
+        f"    print(json.dumps({{'type': 'result', 'text': reply, 'exit_code': {result_exit!r},\n"
+        f"                      'session_id': {session_id!r},\n"
+        "                      'tokens': {'input': 5, 'output': 2}}))\n"
+        "else:\n"
+        "    sys.stdout.write(reply)\n",
+        encoding="utf-8",
+    )
+    return f'"{sys.executable}" "{impl}"', log
+
+
+def _fake_session_store(home: Path, sid: str, model: str, provider: str) -> None:
+    """A minimal Hermes state.db holding one session row, for receipt tests."""
+    import sqlite3
+    home.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(home / "state.db"))
+    con.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, model TEXT, "
+                "billing_provider TEXT, billing_base_url TEXT)")
+    con.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?)", (sid, model, provider, "https://x"))
+    con.commit()
+    con.close()
 
 
 # --- selection -------------------------------------------------------------
@@ -216,11 +311,235 @@ def test_clip_omitted_count_accurate(base):
 
 @isolated
 def test_reviewer_gets_no_tools(base):
-    print("\n[safety] reviewer is launched read-only (no toolset)")
+    print("\n[safety] reviewer gets an explicit ZERO-tool toolset — `-t \"\"` meant ALL tools")
+    # Hermes normalises -t "" to None and loads the config's full CLI toolset
+    # (terminal, write_file, patch, execute_code ...) under YOLO approvals. The
+    # old test asserted `"-t", ""` was passed "to disable all tools" — it pinned
+    # the bug. Assert the real argv instead.
+    stub, log = _argv_stub(base)
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        ok, out = devpair.run_reviewer(
+            {"model": "glm-5.3", "provider": "zai-indirect", "label": "G"}, "hi", 60, False)
+    check("stub answered", ok, out)
+    argv = json.loads(log.read_text(encoding="utf-8")) if log.exists() else []
+    ti = argv.index("-t") if "-t" in argv else -1
+    check("-t is passed", ti >= 0, argv)
+    check("toolset is the explicit zero-tool set, never ''",
+          ti >= 0 and argv[ti + 1] == "context_engine", argv)
+    check("--ignore-rules: no SOUL/memory/AGENTS.md to the reviewer", "--ignore-rules" in argv)
+    check("a usage receipt is requested", "--usage-file" in argv)
+    with _env(DEVPAIR_HERMES_CMD=stub, DEVPAIR_REVIEWER_TOOLSET="bot_room"):
+        devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "hi", 60, False)
+    argv = json.loads(log.read_text(encoding="utf-8"))
+    check("reviewer toolset is configurable", argv[argv.index("-t") + 1] == "bot_room", argv)
     import inspect
-    src = inspect.getsource(devpair.run_reviewer)
-    check("passes -t '' to disable all tools", '"-t", ""' in src)
-    check("no shell=True in reviewer invocation", "shell=True" not in src)
+    check("no shell=True in reviewer invocation",
+          "shell=True" not in inspect.getsource(devpair.run_reviewer)
+          and "shell=True" not in inspect.getsource(devpair._launch))
+
+
+@isolated
+def test_large_prompt_travels_by_file_not_argv(base):
+    print("\n[transport] a prompt past the command-line limit goes through a private file")
+    stub, log = _argv_stub(base)
+    big = ('q"$(x)`\u00e9\u2014\u2713\n' * 20000) + "END-MARKER"
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        ok, out = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, big, 60, False)
+    argv = json.loads(log.read_text(encoding="utf-8")) if log.exists() else []
+    rec = devpair.last_receipt() or {}
+    check("large prompt answered", ok, out[:200])
+    check("whole prompt arrived intact (tail + length)",
+          f"TAIL={big[-12:]}" in out and f"LEN={len(big)}" in out, out[-120:])
+    check("prompt text never appears in argv", not any("END-MARKER" in a for a in argv))
+    check("uses `chat --query-file`", "chat" in argv and "--query-file" in argv, argv[:8])
+    check("file transport is still tool-less",
+          "-t" in argv and argv[argv.index("-t") + 1] == "context_engine"
+          and "--max-turns" in argv)
+    check("receipt names the transport", rec.get("transport") == "file", rec)
+    qf = argv[argv.index("--query-file") + 1] if "--query-file" in argv else ""
+    check("prompt temp file is deleted afterwards", qf and not Path(qf).exists(), qf)
+    check("private temp dir is removed too", qf and not Path(qf).parent.exists(), qf)
+    check("no session record -> identity unknown, with a warning",
+          rec.get("identity") == "unknown"
+          and any("no session record" in w for w in rec.get("warnings", [])), rec)
+    # With a session row in Hermes' store, the file transport gets a real receipt.
+    home = base / "hh"
+    _fake_session_store(home, "20261006_000000_abc", "glm-5.3", "zai-indirect")
+    stub2, _ = _argv_stub(base, session_id="20261006_000000_abc", name="stub_sid")
+    with _env(DEVPAIR_HERMES_CMD=stub2, HERMES_HOME=str(home)):
+        ok, _ = devpair.run_reviewer({"model": "glm-5.3", "provider": "zai-indirect", "label": "G"},
+                                     big, 60, False)
+    rec = devpair.last_receipt() or {}
+    check("file transport identity comes from the session store",
+          ok and rec.get("identity") == "reported-match" and rec.get("identity_source") == "session-store", rec)
+    with _env(DEVPAIR_HERMES_CMD=stub2, HERMES_HOME=str(home)):
+        devpair.run_reviewer({"model": "kimi-k3", "provider": "kimi-coding", "label": "K"}, big, 60, False)
+    check("…and a different stored route is a mismatch, not a match",
+          (devpair.last_receipt() or {}).get("identity") == "reported-mismatch")
+    stub3, _ = _argv_stub(base, session_id="x'; DROP TABLE sessions;--", name="stub_sqlish")
+    with _env(DEVPAIR_HERMES_CMD=stub3, HERMES_HOME=str(home)):
+        devpair.run_reviewer({"model": "glm-5.3", "provider": "zai-indirect", "label": "G"}, big, 60, False)
+    check("a malformed session id is never queried", (devpair.last_receipt() or {}).get("identity") == "unknown")
+    for weird in ("boom", {"x": 1}, 3):
+        stubw, _ = _argv_stub(base, result_exit=weird, name="stub_weird")
+        with _env(DEVPAIR_HERMES_CMD=stubw):
+            ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, big, 60, False)
+        check(f"non-zero/odd result exit_code {weird!r} is a failure, never a crash", ok is False, msg[:120])
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "small", 60, False)
+    check("a small prompt still goes inline (-z)",
+          "-z" in json.loads(log.read_text(encoding="utf-8")))
+
+
+@isolated
+def test_oversized_inline_prompt_is_named_not_missing_cli(base):
+    print("\n[transport] forced inline + oversized prompt says 'too large', not 'CLI not found'")
+    stub, log = _argv_stub(base)
+    with _env(DEVPAIR_HERMES_CMD=stub, DEVPAIR_PROMPT_TRANSPORT="inline"):
+        ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"},
+                                       "X" * 300_000, 60, False)
+    if ok:
+        check("platform accepted a 300k argv (no limit hit) — nothing to misreport", True)
+    else:
+        check("oversize launch failure names the size problem", "too large" in msg, msg)
+        check("…and does not blame a missing CLI", "not found" not in msg, msg)
+        check("receipt status is too-large", (devpair.last_receipt() or {}).get("status") == "too-large")
+
+
+@isolated
+def test_receipt_reports_identity_never_assumes_it(base):
+    print("\n[receipts] requested vs REPORTED route; unknown is never a match")
+    r = {"model": "glm-5.3", "provider": "zai-indirect", "label": "G"}
+    cases = [
+        ({"provider": "zai-indirect", "model": "glm-5.3", "completed": True, "api_calls": 1},
+         True, "reported-match"),
+        ({"provider": "openrouter", "model": "some-other", "completed": True, "api_calls": 1},
+         True, "reported-mismatch"),
+        (None, True, "unknown"),
+    ]
+    for usage, want_ok, want in cases:
+        stub, _ = _argv_stub(base, usage=usage)
+        with _env(DEVPAIR_HERMES_CMD=stub):
+            ok, _ = devpair.run_reviewer(r, "hi", 60, False)
+        rec = devpair.last_receipt() or {}
+        check(f"identity {want}", rec.get("identity") == want and ok is want_ok, rec)
+    stub, _ = _argv_stub(base, usage={"provider": "zai-indirect", "model": "glm-5.3",
+                                      "completed": True, "api_calls": 3})
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        devpair.run_reviewer(r, "hi", 60, False)
+    rec = devpair.last_receipt() or {}
+    check("multiple model calls raise a tool-use warning",
+          any("3 model calls" in w for w in rec.get("warnings", [])), rec.get("warnings"))
+    stub, _ = _argv_stub(base, usage={"provider": "zai-indirect", "model": "glm-5.3",
+                                      "completed": False, "turn_exit_reason": "max_tokens"})
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        ok, msg = devpair.run_reviewer(r, "hi", 60, False)
+    check("a turn the backend reports as incomplete is a failure", ok is False and "not completed" in msg, msg)
+    check("model-name normalisation (4.6 == 4-6)",
+          devpair._route_identity("anthropic", "claude-sonnet-4.6", "anthropic", "claude-sonnet-4-6")
+          == "reported-match")
+    for raw in ('{"provider": "zai-indirect", "mod', "", "[1, 2]", '{"api_calls": "lots"}'):
+        stub, _ = _argv_stub(base, usage_raw=raw, name="stub_torn")
+        with _env(DEVPAIR_HERMES_CMD=stub):
+            ok, _ = devpair.run_reviewer(r, "hi", 60, False)
+        rec = devpair.last_receipt() or {}
+        check(f"torn/odd usage file {raw[:18]!r} -> unknown, no crash", ok and rec.get("identity") == "unknown", rec)
+    stub, log = _argv_stub(base, usage={"provider": "zai-indirect", "model": "glm-5.3", "completed": True})
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        devpair.run_reviewer(r, "hi", 60, False)
+    argv = json.loads(log.read_text(encoding="utf-8"))
+    up = Path(argv[argv.index("--usage-file") + 1])
+    check("usage temp file and its private dir are removed", not up.exists() and not up.parent.exists(), up)
+
+
+@isolated
+def test_reviewer_env_is_scrubbed(base):
+    print("\n[isolation] operator-session env does not follow the reviewer")
+    stub, _ = _argv_stub(base, name="stub_env")
+    with _env(DEVPAIR_HERMES_CMD=stub, HERMES_YOLO_MODE="1", HERMES_RESUME="abc",
+              HERMES_INFERENCE_MODEL="other", HERMES_HOME=str(base / "keepme")):
+        devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "hi", 60, False)
+    seen = json.loads((base / "stub_env.env.json").read_text(encoding="utf-8"))
+    check("YOLO / resume / model-override env removed",
+          not ({"HERMES_YOLO_MODE", "HERMES_RESUME", "HERMES_INFERENCE_MODEL"} & set(seen)), sorted(seen))
+    check("HERMES_HOME is kept (credentials live there)", seen.get("HERMES_HOME") == str(base / "keepme"), seen)
+    check("non-interactive is forced", seen.get("HERMES_NONINTERACTIVE") == "1")
+
+
+def test_non_review_threshold_boundary():
+    print("\n[gate] the short-non-answer threshold is pinned at its boundary")
+    n = devpair.NON_REVIEW_MAX_CHARS
+    check("just under the threshold, verdict-less -> non-review",
+          devpair._is_non_review("review", "x" * (n - 1)))
+    check("at the threshold, verdict-less -> kept (gate fails it closed)",
+          not devpair._is_non_review("review", "x" * n))
+    check("a short reply WITH a verdict is a review", not devpair._is_non_review("review", "## VERDICT\nPROCEED"))
+    check("debug mode has no verdict requirement", not devpair._is_non_review("debug", "short"))
+    if os.name == "nt":
+        def cmd(k):
+            return ["hermes", "-z", "x" * k]
+        check("just under the Windows safe limit fits inline", devpair._fits_inline(cmd(29_900)))
+        check("near the 32,767 hard limit does NOT fit inline", not devpair._fits_inline(cmd(32_000)))
+
+
+@isolated
+def test_timeout_kills_the_reviewer_tree(base):
+    print("\n[lifecycle] a hung reviewer is killed on timeout — child AND grandchild")
+    stub, _ = _argv_stub(base, sleep=60, spawn_child=True, name="stub_tree")
+    beat = base / "stub_tree.beat"
+    t = time.time()
+    with _env(DEVPAIR_HERMES_CMD=stub):
+        ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "hi", 3, False)
+    check("timed out as a failure", ok is False and "timed out" in msg, msg)
+    check("returned promptly (tree killed, not waited on)", time.time() - t < 30, time.time() - t)
+    check("receipt status is timeout", (devpair.last_receipt() or {}).get("status") == "timeout")
+    check("grandchild was actually started (test is live)", beat.exists())
+    time.sleep(0.6)
+    a = beat.read_text() if beat.exists() else ""
+    time.sleep(1.0)
+    b = beat.read_text() if beat.exists() else ""
+    check("grandchild heartbeat stopped — the whole tree died", a == b, (a, b))
+
+
+@isolated
+def test_json_output_carries_route_receipts(base):
+    print("\n[receipts] --json and the saved turn carry per-attempt receipts")
+    stub, _ = _argv_stub(base, reply="## VERDICT\nPROCEED\nfine",
+                         usage={"provider": "kimi-coding", "model": "kimi-k3", "completed": True,
+                                "api_calls": 1})
+    ev = base / "ev.txt"
+    ev.write_text("x = 1\n", encoding="utf-8")
+    env = dict(os.environ, DEVPAIR_HERMES_CMD=stub, DEVPAIR_DRIVER_MODEL="claude-opus-5",
+               DEVPAIR_DRIVER_PROVIDER="anthropic", HERMES_HOME=str(base))
+    r = subprocess.run([sys.executable, str(Path(devpair.__file__)), "critique",
+                        "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--json",
+                        "--session", "rcpt"],
+                       capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(base),
+                       stdin=subprocess.DEVNULL, timeout=120)
+    try:
+        data = json.loads(r.stdout)
+    except Exception:
+        data = {}
+    check("json parsed", bool(data), (r.stdout or r.stderr)[-300:])
+    check("exit 0", r.returncode == 0, r.stderr[-300:])
+    check("route identity is reported-match", (data.get("route") or {}).get("identity") == "reported-match",
+          data.get("route"))
+    check("attempts list present", len(data.get("attempts") or []) == 1)
+    sess = json.loads((base / "devpair" / "sessions" / "rcpt.json").read_text(encoding="utf-8")) \
+        if (base / "devpair" / "sessions" / "rcpt.json").exists() else {}
+    turn = (sess.get("turns") or [{}])[-1]
+    check("saved turn stores the route", (turn.get("route") or {}).get("reported_model") == "kimi-k3", turn.get("route"))
+    stub_mm, _ = _argv_stub(base, reply="## VERDICT\nPROCEED\nfine", name="stub_mm",
+                            usage={"provider": "openrouter", "model": "cheap-x", "completed": True,
+                                   "api_calls": 1})
+    env["DEVPAIR_HERMES_CMD"] = stub_mm
+    r = subprocess.run([sys.executable, str(Path(devpair.__file__)), "critique",
+                        "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--json",
+                        "--session", "rcpt-mm"],
+                       capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(base),
+                       stdin=subprocess.DEVNULL, timeout=120)
+    check("a reported route mismatch is shouted on stderr even in --json mode",
+          "ROUTE MISMATCH" in r.stderr and "openrouter/cheap-x" in r.stderr, r.stderr[-300:])
 
 
 # --- driver identity (fix: same-family guard must use the LIVE model) -------
@@ -716,6 +1035,11 @@ def test_gate_exit_code_end_to_end(base):
           f"got {r.returncode}: {r.stderr[-300:]}")
 
     r = run(unparseable, "--gate")
+    check("short verdict-less non-answer is a FAILED attempt, never a pass (exit 1)",
+          r.returncode == 1, f"got {r.returncode}: {r.stderr[-300:]}")
+    check("…and says no review was produced", "no review" in r.stderr, r.stderr[-300:])
+    long_unparseable = unparseable + (" More prose without any verdict line." * 40)
+    r = run(long_unparseable, "--gate")
     check("unparseable verdict fails CLOSED -> exit 2", r.returncode == 2,
           f"got {r.returncode}: {r.stderr[-300:]}")
 
@@ -785,12 +1109,607 @@ def test_verify_claims_catches_hallucinated_anchors(base):
 
 # --- F3: doctor probes in parallel --------------------------------------------
 def test_doctor_probes_in_parallel():
-    print("\n[doctor] backends are probed concurrently, not serially")
-    import inspect
-    src = inspect.getsource(devpair.cmd_doctor)
-    check("uses a thread pool", "ThreadPoolExecutor" in src)
-    check("no serial for-loop over REVIEWERS.items() calling run_reviewer",
-          "for key, r in REVIEWERS.items():" not in src)
+    print("\n[doctor] static doctor calls NOTHING; --live probes run concurrently")
+    calls = []
+    lock = __import__("threading").Lock()
+
+    def slow_ok(reviewer, prompt, timeout, verbose):
+        with lock:
+            calls.append(reviewer["model"])
+        time.sleep(1.0)
+        return True, "OK"
+
+    saved_rr, saved_roster = devpair.run_reviewer, dict(devpair.REVIEWERS)
+    with tempfile.TemporaryDirectory() as td:
+        orig = (devpair.BASE, devpair.CONFIG, devpair.LEDGER)
+        devpair.BASE, devpair.CONFIG, devpair.LEDGER = Path(td), Path(td) / "config.json", Path(td) / "l.jsonl"
+        devpair.run_reviewer = slow_ok
+        try:
+            ns = argparse.Namespace(driver="openai/gpt-x", live=False, requested_by="user")
+            with _quiet():
+                devpair.cmd_doctor(ns)
+            check("static doctor makes zero model calls", calls == [], calls)
+            ns.live = True
+            t = time.time()
+            with _quiet():
+                devpair.cmd_doctor(ns)
+            n = len(devpair.REVIEWERS)
+            check("live doctor probes every reviewer", len(calls) == n, calls)
+            el = time.time() - t
+            # Each probe sleeps 1s: fully parallel is ~1s; ANY serialisation of
+            # two or more probes is >= 2s. Roster-size independent.
+            check("probes ran concurrently", n < 2 or el < 1.9, el)
+        finally:
+            devpair.run_reviewer = saved_rr
+            devpair.REVIEWERS.clear(); devpair.REVIEWERS.update(saved_roster)
+            devpair.BASE, devpair.CONFIG, devpair.LEDGER = orig
+
+
+class _quiet:
+    def __enter__(self):
+        import contextlib, io
+        self._cm = contextlib.ExitStack()
+        self._cm.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        self._cm.enter_context(contextlib.redirect_stderr(io.StringIO()))
+        return self
+
+    def __exit__(self, *exc):
+        self._cm.close()
+        return False
+
+
+def _pair_args(**kw):
+    base = dict(mode="critique", session="t", ask="q", focus=None, diff=False, diff_ref=None,
+                files=[], plan=None, error=None, cmd=None, reviewer=None, driver="openai/gpt-x",
+                with_model=None, requested_by="user", dry_run=False, budget=0, timeout=30,
+                verbose=False, json=True, gate=False, allow_partial=False, strict_citations=False)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+@isolated
+def test_invalid_enforcement_config_refuses_paid_runs(base):
+    print("\n[enforcement] a present-but-invalid config refuses; it is never read as 'no limits'")
+    reviewer = {"provider": "p", "model": "m"}
+    driver = {"provider": "d", "model": "dm"}
+    for blob in ('{"daily_cap": 1,', '{"daily_cap": "1"}', '{"daily_cap": -1}',
+                 '{"daily_cap": 1.5}', '{"daily_cap": true}', '{"require_attestation": "yes"}',
+                 '[]', '{"require_attestation": true'):
+        devpair.CONFIG.write_text(blob, encoding="utf-8")
+        before = len(devpair.read_ledger())
+        try:
+            devpair.authorize(_pair_args(), reviewer, driver, 0)
+            check(f"invalid {blob!r} refuses", False, "authorised a paid run")
+        except SystemExit as e:
+            check(f"invalid {blob!r} refuses", "invalid" in str(e).lower(), str(e)[:120])
+        check(f"invalid {blob!r} wrote no ledger record", len(devpair.read_ledger()) == before)
+    devpair.CONFIG.unlink()
+    devpair.CONFIG.mkdir()   # exists but cannot be read as a file
+    try:
+        devpair.authorize(_pair_args(), reviewer, driver, 0)
+        check("unreadable config refuses", False)
+    except SystemExit as e:
+        check("unreadable config refuses", "invalid" in str(e).lower(), str(e)[:120])
+    devpair.CONFIG.rmdir()
+    check("absent config still means no limits", bool(devpair.authorize(_pair_args(), reviewer, driver, 0)))
+    devpair.CONFIG.write_text('{"daily_cap": 0}', encoding="utf-8")
+    check("daily_cap 0 is valid (unlimited)", bool(devpair.authorize(_pair_args(), reviewer, driver, 0)))
+    devpair.CONFIG.write_text("{", encoding="utf-8")
+    check("help-path readers still tolerate a broken file", devpair._load_cfg() == {})
+    check("…while enforcement sees it as invalid", devpair._cfg_state()[0] == "invalid")
+
+
+@isolated
+def test_live_doctor_is_capped_and_ledgered(base):
+    print("\n[enforcement] live doctor probes are reserved, counted and capped")
+    calls = []
+
+    def ok_rr(reviewer, prompt, timeout, verbose):
+        calls.append(reviewer["model"])
+        return True, "OK"
+
+    saved = devpair.run_reviewer
+    devpair.run_reviewer = ok_rr
+    try:
+        n = len(devpair.REVIEWERS)
+        devpair.CONFIG.write_text(json.dumps({"daily_cap": n - 1}), encoding="utf-8")
+        with _quiet():
+            devpair.cmd_doctor(argparse.Namespace(driver="openai/gpt-x", live=True, requested_by="user"))
+        check("probes stop at the cap", len(calls) == n - 1, calls)
+        check("each probe is a counted attempt", devpair.runs_today() == n - 1, devpair.runs_today())
+        outs = [r for r in devpair.read_ledger() if r.get("kind") == "outcome"]
+        check("each probe has an outcome record", len(outs) == n - 1, len(outs))
+        calls.clear()
+        with _quiet():
+            rc = devpair.cmd_doctor(argparse.Namespace(driver="openai/gpt-x", live=True, requested_by="user"))
+        check("at cap, live doctor makes zero calls", calls == [] and rc == 1, (calls, rc))
+        devpair.CONFIG.write_text(json.dumps({"require_attestation": True}), encoding="utf-8")
+        calls.clear()
+        with _quiet():
+            devpair.cmd_doctor(argparse.Namespace(driver="openai/gpt-x", live=True, requested_by=None))
+        check("live doctor honours required attestation", calls == [], calls)
+    finally:
+        devpair.run_reviewer = saved
+
+
+@isolated
+def test_session_names_are_contained(base):
+    print("\n[sessions] a session name can never resolve outside the sessions directory")
+    for bad in ("../escape", "..", "a/b", "a\\b", "C:/Windows/x", "/etc/passwd", "x..y", ".hidden"):
+        try:
+            p = devpair.session_path(bad, create=False)
+            check(f"refuses {bad!r}", False, f"resolved to {p}")
+        except SystemExit as e:
+            check(f"refuses {bad!r}", "session" in str(e).lower(), str(e)[:100])
+    p = devpair.session_path("feature-1.2_x", create=False)
+    check("a normal name resolves inside SESSIONS",
+          p.resolve().parent == devpair.SESSIONS.resolve(), p)
+    devpair.CURRENT.write_text("../../evil", encoding="utf-8")
+    with _quiet():
+        p = devpair.session_path(None, create=False)
+    check("an invalid pointer is ignored, not followed",
+          p.resolve().parent == devpair.SESSIONS.resolve(), p)
+
+
+@isolated
+def test_default_session_is_per_project(base):
+    print("\n[sessions] the implicit session belongs to ONE project; B never replays A's review")
+    a, b = base / "projA", base / "projB"
+    a.mkdir(); b.mkdir()
+    # Separate repos: the temp dir may itself sit inside a git work tree, and two
+    # directories in ONE repo are rightly one project.
+    for d in (a, b):
+        subprocess.run(["git", "init", "-q", str(d)], capture_output=True)
+    cwd = os.getcwd()
+    try:
+        os.chdir(a)
+        pa = devpair.session_path(None, create=True)
+        devpair.append_turn(pa, {"mode": "review", "response": "A-ONLY"}, devpair.project_root())
+        check("project A resumes its own session", devpair.session_path(None, create=False) == pa)
+        os.chdir(b)
+        pb = devpair.session_path(None, create=False)
+        check("project B does not get A's session", pb != pa, (pa, pb))
+        devpair.session_path(None, create=True)
+        os.chdir(a)
+        check("A's pointer survives B creating its own", devpair.session_path(None, create=False) == pa)
+        # A legacy single-name pointer to A's session must not leak into B.
+        devpair.CURRENT.write_text(pa.stem, encoding="utf-8")
+        os.chdir(b)
+        check("legacy global pointer is not replayed in another project",
+              devpair.session_path(None, create=False) != pa)
+        os.chdir(a)
+        check("legacy pointer still works for its own project",
+              devpair.session_path(None, create=False) == pa)
+    finally:
+        os.chdir(cwd)
+
+
+@isolated
+def test_stale_writers_keep_every_turn(base):
+    print("\n[sessions] concurrent writers append under a lock — no turn is lost")
+    p = devpair.session_path("race", create=False)
+    import threading
+    errs = []
+
+    def w(i):
+        try:
+            devpair.append_turn(p, {"id": i}, str(base))
+        except Exception as e:  # pragma: no cover
+            errs.append(e)
+
+    ts = [threading.Thread(target=w, args=(i,)) for i in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    ids = sorted(t["id"] for t in devpair.load_session(p)["turns"])
+    check("all 8 concurrent turns retained", ids == list(range(8)) and not errs, (ids, errs))
+
+
+@isolated
+def test_corrupt_session_is_kept_aside_not_overwritten(base):
+    print("\n[sessions] an unreadable session is quarantined, never silently replaced")
+    p = devpair.SESSIONS / "hist.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"turns": [ {"precious": tru', encoding="utf-8")
+    with _quiet():
+        s = devpair.load_session(p)
+    aside = list(p.parent.glob("hist.json.corrupt-*"))
+    check("fresh session returned", s.get("turns") == [])
+    check("corrupt original kept aside", len(aside) == 1 and "precious" in aside[0].read_text(encoding="utf-8"))
+
+
+@isolated
+def test_saved_state_is_redacted(base):
+    print("\n[privacy] outbound redaction now also covers what is SAVED to disk")
+    secret = "sk-" + "SYNTHETICFIXTURE" * 3
+    saved_rr, saved_g = devpair.run_reviewer, devpair.gather
+    devpair.run_reviewer = lambda r, p, t, v: (True, f"## VERDICT\nPROCEED\nquoted {secret}")
+    devpair.gather = lambda a: ("evidence", [])
+    try:
+        with _quiet():
+            devpair.cmd_pair(_pair_args(session="priv", ask=f"key is {secret}", focus=f"also {secret}"))
+        raw = (devpair.SESSIONS / "priv.json").read_text(encoding="utf-8")
+        check("secret absent from the saved session", secret not in raw)
+        check("redaction marker present instead", "[REDACTED" in raw)
+        check("secret absent from the ledger", secret not in devpair.LEDGER.read_text(encoding="utf-8"))
+    finally:
+        devpair.run_reviewer, devpair.gather = saved_rr, saved_g
+
+
+@isolated
+def test_gate_is_coverage_aware(base):
+    print("\n[gate] an approval is only as good as the evidence the HARNESS sent")
+    good = "## VERDICT\nPROCEED\n\nLooks right."
+    claims_full = ("## VERDICT\nPROCEED\n\nI reviewed the COMPLETE evidence; coverage is full "
+                   "and nothing was truncated.")
+    stub_cmd, _ = _argv_stub(base, reply=good, name="stub_cov")
+    stub_claim, _ = _argv_stub(base, reply=claims_full, name="stub_claim")
+    small = base / "small.py"
+    small.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    big = base / "big.py"
+    big.write_text("".join(f"x_{i} = {i}\n" for i in range(6000)), encoding="utf-8")
+    env = dict(os.environ, DEVPAIR_DRIVER_MODEL="claude-opus-5", DEVPAIR_DRIVER_PROVIDER="anthropic",
+               HERMES_HOME=str(base))
+
+    def run(stub, *extra):
+        env["DEVPAIR_HERMES_CMD"] = stub
+        return subprocess.run([sys.executable, str(Path(devpair.__file__)), "review",
+                               "--with", "kimi-coding/kimi-k3", "--ask", "check", *extra],
+                              capture_output=True, text=True, encoding="utf-8", env=env,
+                              cwd=str(base), stdin=subprocess.DEVNULL, timeout=120)
+
+    r = run(stub_cmd, "--files", str(small), "--gate", "--json")
+    d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    check("complete evidence + approval -> gate passes", r.returncode == 0, r.stderr[-300:])
+    check("…and JSON says coverage complete", d.get("coverage") == "complete", d.get("coverage_gaps"))
+    check("…with a packet hash", len((d.get("evidence") or {}).get("sha256") or "") == 64)
+
+    r = run(stub_cmd, "--files", str(big), "--gate")
+    check("same approval on a TRUNCATED file -> gate fails (exit 2)", r.returncode == 2, r.stderr[-300:])
+    check("…and names the truncation", "truncated" in r.stderr and "partial" in r.stderr, r.stderr[-300:])
+
+    r = run(stub_claim, "--files", str(big), "--gate")
+    check("the reviewer CLAIMING full coverage cannot override the manifest",
+          r.returncode == 2, r.stderr[-300:])
+
+    r = run(stub_cmd, "--files", str(big), "--gate", "--allow-partial", "--json")
+    d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    check("--allow-partial accepts it (exit 0)", r.returncode == 0, r.stderr[-300:])
+    check("…but it is visibly PARTIAL (stderr + JSON)",
+          "PARTIAL" in r.stderr and d.get("coverage") == "partial", (r.stderr[-200:], d.get("coverage")))
+
+    r = run(stub_cmd, "--files", str(small), "--files", str(base / "nope.py"), "--gate")
+    check("a requested file that was never sent -> gate fails", r.returncode == 2, r.stderr[-300:])
+
+    r = run(stub_cmd, "--files", str(big))
+    check("without --gate, partial evidence stays advisory (exit 0) but is shown",
+          r.returncode == 0 and "EVIDENCE PARTIAL" in r.stdout, r.stdout[-400:])
+    r = run(stub_cmd, "--files", str(big), "--dry-run")
+    check("--dry-run shows evidence coverage before anything is paid for",
+          "evidence : partial" in r.stdout and "truncated" in r.stdout, r.stdout[-400:])
+
+
+def test_gate_decision_unit():
+    print("\n[gate] gate_decision: unknown coverage fails closed; citations strict only on request")
+    ok = "## VERDICT\nPROCEED\nfine"
+    full = {"complete": True, "gaps": []}
+    f, why, cov = devpair.gate_decision(ok, None)
+    check("no manifest -> coverage unknown -> fail closed", f and cov == "unknown", why)
+    f, why, cov = devpair.gate_decision(ok, None, allow_partial=True)
+    check("--allow-partial does NOT excuse UNKNOWN coverage", f, why)
+    f, why, cov = devpair.gate_decision(ok, {"complete": False, "gaps": ["diff truncated"]})
+    check("partial manifest -> fail", f and cov == "partial", why)
+    f, why, _ = devpair.gate_decision(ok, {"complete": True, "gaps": ["sneaky"]})
+    check("a manifest with gaps is never complete, whatever its flag says", f, why)
+    f, why, _ = devpair.gate_decision("## VERDICT\nDO NOT SHIP\nno", full, allow_partial=True)
+    check("a bad verdict still fails with complete coverage", f, why)
+    bad = ["x.py:9 — not in the evidence sent to the reviewer"]
+    check("unverified citations are advisory by default",
+          not devpair.gate_decision(ok, full, claim_problems=bad)[0])
+    check("…and blocking under --strict-citations",
+          devpair.gate_decision(ok, full, claim_problems=bad, strict_citations=True)[0])
+
+
+@isolated
+def test_claims_checked_against_the_packet(base):
+    print("\n[claims] a cited file must have been SENT, not merely exist in the tree")
+    (base / "sent.py").write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+    (base / "unsent.py").write_text("z = 0\n" * 50, encoding="utf-8")
+    resp = "See sent.py:2 and unsent.py:10 and router.py:42."
+    probs = devpair.verify_claims(resp, str(base), packet_paths=["sent.py"],
+                                  packet_text="Traceback ... File router.py, line 42")
+    check("cited file in the packet is fine", not any(p.startswith("sent.py") for p in probs), probs)
+    check("existing-but-unsent file is flagged", any("unsent.py:10 — not in the evidence" in p for p in probs), probs)
+    check("a file named in pasted error output counts as sent",
+          not any("not in the evidence" in p and p.startswith("router.py") for p in probs), probs)
+    check("without a packet, behaviour is unchanged (existence only)",
+          not any("not in the evidence" in p for p in devpair.verify_claims(resp, str(base))))
+    check("suffix match: tools/sent.py packet satisfies a bare sent.py citation",
+          devpair._in_packet("sent.py", ["tools/sent.py"]) and not devpair._in_packet("ent.py", ["tools/sent.py"]))
+
+
+@isolated
+def test_manifest_records_what_was_left_out(base):
+    print("\n[manifest] gather() records clipped and omitted evidence, and the paths sent")
+    subprocess.run(["git", "init", "-q", str(base)], capture_output=True)
+    for i in range(devpair.MAX_UNTRACKED_FILES + 2):
+        (base / f"new{i}.py").write_text(f"v = {i}\n", encoding="utf-8")
+    cwd = os.getcwd()
+    try:
+        os.chdir(base)
+        devpair.gather(_pair_args(diff=True))
+    finally:
+        os.chdir(cwd)
+    m = devpair.last_manifest() or {}
+    check("manifest exists", bool(m))
+    check("untracked files beyond the limit are listed as omitted",
+          len([o for o in m.get("omitted", []) if "limit" in o["reason"]]) == 2, m.get("omitted"))
+    check("coverage is not complete", m.get("complete") is False)
+    check("the files that WERE sent are in paths", len(m.get("paths", [])) == devpair.MAX_UNTRACKED_FILES, m.get("paths"))
+
+
+def test_prompt_carries_calibration_duties():
+    print("\n[council crossover] prompts carry framing, stakes, confidence, flip and falsifier duties")
+    for mode in ("critique", "review", "debug", "alt", "followup"):
+        p = devpair.build_prompt(mode, "q", "code", {}, None)
+        check(f"{mode}: confidence + flip condition + falsifier required",
+              "## CONFIDENCE" in p and "Flip condition" in p and "Falsifier" in p)
+        check(f"{mode}: neutral framing + stake-weighted findings", "FRAMING:" in p and "STAKES:" in p)
+    v = devpair.build_prompt("verify", "q", "work", {}, None)
+    check("verify shape is untouched (pinned to verify-results)", "## WHAT WOULD CHANGE MY MIND" not in v)
+    m = {"complete": False, "gaps": ["diff truncated (9,000 of 70,000 chars omitted)"]}
+    p = devpair.build_prompt("review", "q", "code", {}, None, manifest=m)
+    check("harness-reported gaps are shown to the reviewer",
+          "EVIDENCE SCOPE" in p and "diff truncated" in p)
+    p = devpair.build_prompt("review", "q", "code", {}, None, manifest={"complete": True, "gaps": []})
+    check("complete evidence adds no scope warning", "EVIDENCE SCOPE" not in p)
+    check("verdict parsing ignores the new tail headings",
+          devpair._all_verdicts("## VERDICT\nSHIP\nok\n## CONFIDENCE\nHigh\n## WHAT WOULD CHANGE MY MIND\nx") == ["SHIP"])
+
+
+def test_review_round3_fixes():
+    print("\n[round 3] numeric secrets, location-only citation fallback")
+    out, n = devpair.redact_secrets("password: 123456")
+    check("a numeric PIN/password is still redacted", n == 1, out)
+    check("a traceback location counts as sent",
+          devpair._located_in_text("router.py", 'File "/srv/app/router.py", line 42, in x'))
+    check("a compiler-style location counts as sent", devpair._located_in_text("router.py", "router.py:42: E"))
+    check("a bare mention (comment/import) does NOT excuse a citation",
+          not devpair._located_in_text("router.py", "# helpers live in router.py"))
+
+
+@isolated
+def test_prune_never_deletes_a_live_lock(base):
+    print("\n[prune] a lock is removed only with its doomed/missing session")
+    d = devpair.SESSIONS
+    d.mkdir(parents=True, exist_ok=True)
+    old = time.time() - 90 * 86400
+    (d / "live.json").write_text('{"turns": []}', encoding="utf-8")       # recent session
+    (d / "gone.json").write_text('{"turns": []}', encoding="utf-8")
+    os.utime(d / "gone.json", (old, old))                                  # doomed session
+    for n in ("live.json.lock", "gone.json.lock", "orphan.json.lock"):
+        (d / n).write_text("", encoding="utf-8")
+        os.utime(d / n, (old, old))
+    (d / "bad.json").write_text('{"turns": [ {"ask": "sk-' + "X" * 30 + '"', encoding="utf-8")
+    with _quiet():
+        devpair.cmd_prune(argparse.Namespace(days=30, dry_run=False, redact=True))
+    left = sorted(p.name for p in d.iterdir())
+    check("live session's old lock survives", "live.json.lock" in left, left)
+    check("doomed session's lock and orphan lock are removed",
+          "gone.json.lock" not in left and "orphan.json.lock" not in left, left)
+    check("--redact skips an unparseable session instead of overwriting it",
+          (d / "bad.json").read_text(encoding="utf-8").startswith('{"turns": [ {"ask"'))
+
+
+@isolated
+def test_pin_lock_timeout_rescues_the_paid_turn(base):
+    print("\n[sessions] CURRENT locked past the deadline AFTER the paid call: turn rescued, no crash")
+    import threading
+    saved = (devpair.LOCK_DEADLINE_S, devpair.run_reviewer, devpair.gather)
+    devpair.LOCK_DEADLINE_S = 1
+    release = threading.Event()
+
+    def hold():
+        with devpair._file_lock(str(devpair.CURRENT) + ".lock"):
+            release.wait(10)
+
+    def reviewer(r, p, t, v):
+        threading.Thread(target=hold, daemon=True).start()
+        time.sleep(0.3)
+        return True, "## VERDICT\nPROCEED\nok"
+
+    devpair.run_reviewer, devpair.gather = reviewer, (lambda a: ("evidence", []))
+    try:
+        with _quiet():
+            rc = devpair.cmd_pair(_pair_args(session=None))
+    finally:
+        release.set()
+        devpair.LOCK_DEADLINE_S, devpair.run_reviewer, devpair.gather = saved
+    rescued = list(devpair.SESSIONS.glob("*.turn-*.json"))
+    check("no crash after the paid call", rc == 0, rc)
+    check("the turn was rescued to a sidecar", len(rescued) == 1, rescued)
+
+
+@isolated
+def test_binary_untracked_and_listing_failures_are_gaps(base):
+    print("\n[manifest] a binary untracked file is an omission, not silence")
+    subprocess.run(["git", "init", "-q", str(base)], capture_output=True)
+    (base / "blob.bin").write_bytes(b"\x00\x01\x02" * 100)
+    (base / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    cwd = os.getcwd()
+    try:
+        os.chdir(base)
+        devpair.gather(_pair_args(diff=True))
+    finally:
+        os.chdir(cwd)
+    m = devpair.last_manifest() or {}
+    check("binary untracked file recorded as omitted",
+          any(o["source"] == "blob.bin" and "binary" in o["reason"] for o in m.get("omitted", [])), m.get("omitted"))
+    check("…so coverage is not complete", m.get("complete") is False)
+
+
+@isolated
+def test_lock_timeout_never_proceeds_unlocked(base):
+    print("\n[locks] a lock held past the deadline REFUSES or RESCUES — never proceeds unlocked")
+    saved = devpair.LOCK_DEADLINE_S
+    devpair.LOCK_DEADLINE_S = 1
+    try:
+        sp = devpair.SESSIONS / "held.json"
+        devpair.append_turn(sp, {"id": "first"}, str(base))
+        with devpair._file_lock(str(sp) + ".lock") as holder:
+            check("holder really has the lock", holder.locked)
+            with _quiet():
+                devpair.append_turn(sp, {"id": "second"}, str(base))
+        turns = devpair.load_session(sp)["turns"]
+        check("the held session was NOT written unlocked", [t["id"] for t in turns] == ["first"], turns)
+        rescued = list(devpair.SESSIONS.glob("held.turn-*.json"))
+        check("the paid-for turn was rescued to a sidecar",
+              len(rescued) == 1 and "second" in rescued[0].read_text(encoding="utf-8"), rescued)
+        with devpair._ledger_lock():
+            ok, why = devpair.reserve_attempt(_pair_args(), {"provider": "p", "model": "m"},
+                                              {"provider": "d", "model": "dm"}, 0, run_id="r", attempt=1)
+            with _quiet():
+                devpair.record_outcome("r", 1, {"status": "ok"})   # must not raise
+        check("a held LEDGER lock refuses the paid attempt", ok is False and "lock" in why.lower(), why)
+        check("…and nothing was reserved", not devpair.read_ledger())
+    finally:
+        devpair.LOCK_DEADLINE_S = saved
+
+
+@isolated
+def test_session_name_hardening(base):
+    print("\n[sessions] device names / trailing dots refused; names never shared across projects")
+    for bad in ("NUL", "nul.x", "CON", "com1", "LPT9.backup", "aux", "trailing."):
+        check(f"refuses {bad!r}", not devpair._valid_session_name(bad))
+    check("ordinary names still fine", devpair._valid_session_name("nullable-2") and devpair._valid_session_name("console1"))
+    names = {devpair._new_session_name() for _ in range(20)}
+    check("same-second names are distinct", len(names) == 20, len(names))
+    # Provisional name taken by ANOTHER project while our review ran.
+    seq = iter(["provisional-1", "fresh-2", "fresh-3"])
+    saved_n, saved_rr, saved_g = devpair._new_session_name, devpair.run_reviewer, devpair.gather
+    devpair._new_session_name = lambda: next(seq)
+    other = os.path.normcase(os.path.realpath(str(base / "otherproj")))
+
+    def thief(r, p, t, v):
+        devpair.save_session(devpair.SESSIONS / "provisional-1.json",
+                             {"project": other, "turns": [{"id": "theirs"}]})
+        devpair._set_current(other, "provisional-1")
+        return True, "## VERDICT\nPROCEED\nok"
+
+    devpair.run_reviewer, devpair.gather = thief, (lambda a: ("evidence", []))
+    try:
+        with _quiet():
+            devpair.cmd_pair(_pair_args(session=None))
+    finally:
+        devpair._new_session_name, devpair.run_reviewer, devpair.gather = saved_n, saved_rr, saved_g
+    theirs = devpair.load_session(devpair.SESSIONS / "provisional-1.json")["turns"]
+    ours = devpair.load_session(devpair.SESSIONS / "fresh-2.json")["turns"]
+    check("the other project's session is untouched", [t.get("id") for t in theirs] == ["theirs"], theirs)
+    check("our turn went to a freshly allocated session", len(ours) == 1 and ours[0].get("mode") == "critique", ours)
+
+
+@isolated
+def test_redaction_at_the_load_boundary(base):
+    print("\n[privacy] OLD plaintext turns are redacted on load, replay, quarantine and prune --redact")
+    secret = "sk-" + "LEGACYFIXTURE" * 3
+    sp = devpair.SESSIONS / "legacy.json"
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.write_text(json.dumps({"project": None, "turns": [
+        {"mode": "review", "ask": f"key {secret}", "focus": "", "response": f"saw {secret}"}]}),
+        encoding="utf-8")
+    s = devpair.load_session(sp)
+    check("loaded turns are redacted", secret not in json.dumps(s))
+    check("…so nothing replays it to the next reviewer", secret not in devpair.prior_context(s))
+    with _quiet():
+        devpair.cmd_prune(argparse.Namespace(days=3650, dry_run=False, redact=True))
+    check("prune --redact rewrites the file on disk", secret not in sp.read_text(encoding="utf-8"))
+    bad = devpair.SESSIONS / "broken.json"
+    bad.write_text('{"turns": [{"ask": "' + secret + '"', encoding="utf-8")
+    with _quiet():
+        devpair.load_session(bad)
+    aside = list(devpair.SESSIONS.glob("broken.json.corrupt-*"))
+    check("a quarantined corrupt copy is redacted too",
+          len(aside) == 1 and secret not in aside[0].read_text(encoding="utf-8"), aside)
+
+
+@isolated
+def test_prune_sweeps_sidecars(base):
+    print("\n[prune] old lock/tmp/quarantine/rescue sidecars are swept too")
+    d = devpair.SESSIONS
+    d.mkdir(parents=True, exist_ok=True)
+    old = time.time() - 90 * 86400
+    for n in ("a.json.lock", "a.json.tmp-123", "a.json.corrupt-20200101-000000", "a.turn-1-2.json"):
+        (d / n).write_text("x", encoding="utf-8")
+        os.utime(d / n, (old, old))
+    (d / "keep.json.lock").write_text("x", encoding="utf-8")
+    with _quiet():
+        devpair.cmd_prune(argparse.Namespace(days=30, dry_run=False, redact=False))
+    left = sorted(p.name for p in d.iterdir())
+    check("old sidecars removed, fresh ones kept", left == ["keep.json.lock"], left)
+
+
+def test_redaction_spares_code_but_not_secrets():
+    print("\n[privacy] the redactor no longer garbles token COUNTS and code expressions")
+    for code in ('"input_tokens": _as_int(u.get("input_tokens")),', "max_tokens = 4096",
+                 'token = cfg["token"]', "TOTAL_TOKENS=120000", "access_token = get_token(user)"):
+        out, n = devpair.redact_secrets(code)
+        check(f"untouched: {code[:34]!r}", out == code and n == 0, out)
+    for real in ("API_KEY=abcd1234efgh5678", "password: hunter2xyz", 'client_secret = "s3cr3tV4lue"'):
+        out, n = devpair.redact_secrets(real)
+        check(f"still redacted: {real[:24]!r}", n == 1 and "[REDACTED" in out, out)
+
+
+@isolated
+def test_session_store_profile_resolution(base):
+    print("\n[receipts] HERMES_HOME + HERMES_PROFILE resolves the PROFILE store")
+    root = base / "root"
+    devpair_fake = root / "profiles" / "work"
+    _fake_session_store(devpair_fake, "sid_1", "glm-5.3", "zai-indirect")
+    with _env(HERMES_HOME=str(root), HERMES_PROFILE="work"):
+        got = devpair._session_store_receipt("sid_1")
+    check("profile store used when both are set", (got or {}).get("model") == "glm-5.3", got)
+    with _env(HERMES_HOME=str(devpair_fake), HERMES_PROFILE="work"):
+        got = devpair._session_store_receipt("sid_1")
+    check("HERMES_HOME already pointing at the profile dir still works", (got or {}).get("provider") == "zai-indirect", got)
+
+
+@isolated
+def test_fallback_attempts_are_reserved_and_counted(base):
+    print("\n[enforcement] every fallback is its own reserved attempt; the ledger names who was called")
+    calls = []
+    reserved_before_call = []
+
+    def fail_twice(reviewer, prompt, timeout, verbose):
+        calls.append(f"{reviewer['provider']}/{reviewer['model']}")
+        # Reserve-BEFORE-call: at call time the ledger must already hold this attempt.
+        att_now = [r for r in devpair.read_ledger() if r.get("kind") == "attempt"]
+        reserved_before_call.append(bool(att_now) and att_now[-1].get("reviewer") == calls[-1])
+        return (len(calls) >= 3), ("## VERDICT\nPROCEED\nfine" if len(calls) >= 3 else "exit 1: boom")
+
+    saved_rr, saved_g = devpair.run_reviewer, devpair.gather
+    devpair.run_reviewer = fail_twice
+    devpair.gather = lambda a: ("evidence", [])
+    try:
+        with _quiet():
+            rc = devpair.cmd_pair(_pair_args())
+        att = [r for r in devpair.read_ledger() if r.get("kind") == "attempt"]
+        check("three attempts made", len(calls) == 3 and rc == 0, (calls, rc))
+        check("each attempt was reserved BEFORE its call", reserved_before_call == [True] * 3,
+              reserved_before_call)
+        check("three attempt reservations", len(att) == 3, len(att))
+        check("ledger names the reviewer actually called each time",
+              [r["reviewer"] for r in att] == calls, ([r["reviewer"] for r in att], calls))
+        check("attempts share one run id", len({r["run_id"] for r in att}) == 1)
+        # Now with a cap that leaves room for only two attempts.
+        calls.clear()
+        devpair.CONFIG.write_text(json.dumps({"daily_cap": 5}), encoding="utf-8")
+        with _quiet():
+            rc = devpair.cmd_pair(_pair_args(session="t2"))
+        check("cap stops the fallback chain", len(calls) == 2 and rc == 1, (calls, rc))
+        check("cap is never exceeded", devpair.runs_today() == 5, devpair.runs_today())
+    finally:
+        devpair.run_reviewer, devpair.gather = saved_rr, saved_g
 
 
 # --- F4: total wall-clock budget ----------------------------------------------
@@ -879,6 +1798,25 @@ def test_banner_survives_a_legacy_console_encoding():
 # --- PORTABILITY: the tool must find the right home on any machine ----------
 def test_hermes_binary_resolves_through_pathext():
     print("\n[portable] a .cmd/.bat shim on PATH is found, not just hermes.exe")
+    # PATH resolution must see no explicit override. These checks only RESOLVE
+    # the command; nothing in this test launches a reviewer.
+    _guard = os.environ.pop("DEVPAIR_HERMES_CMD", None)
+    try:
+        _resolver_checks()
+    finally:
+        if _guard is not None:
+            os.environ["DEVPAIR_HERMES_CMD"] = _guard
+
+
+def test_suite_never_reaches_a_real_backend():
+    print("\n[safety] the suite's default reviewer backend is a local no-network stub")
+    check("default backend is the exit-7 stub", os.environ.get("DEVPAIR_HERMES_CMD") == NO_NETWORK_STUB,
+          os.environ.get("DEVPAIR_HERMES_CMD"))
+    ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "hi", 30, False)
+    check("an unstubbed launch fails locally (exit 7), never answers", ok is False and "exit 7" in msg, msg[:120])
+
+
+def _resolver_checks():
     # Found by deploying to Windows: a bare "hermes" in a subprocess list goes to
     # CreateProcess, which only appends .exe — so the shim the manual-install
     # instructions tell people to create was invisible. shutil.which walks
@@ -1870,6 +2808,11 @@ def main():
         test_run_reviewer_reports_exit_code,
         test_clip_omitted_count_accurate,
         test_reviewer_gets_no_tools,
+        test_large_prompt_travels_by_file_not_argv,
+        test_oversized_inline_prompt_is_named_not_missing_cli,
+        test_receipt_reports_identity_never_assumes_it,
+        test_timeout_kills_the_reviewer_tree,
+        test_json_output_carries_route_receipts,
         test_driver_flag_overrides_config_and_env,
         test_same_family_guard_uses_explicit_driver,
         test_followup_empty_session_warns,
@@ -1889,7 +2832,33 @@ def main():
         test_conflicting_verdicts_fail_closed,
         test_gate_exit_code_end_to_end,
         test_verify_claims_catches_hallucinated_anchors,
+        test_suite_never_reaches_a_real_backend,
         test_doctor_probes_in_parallel,
+        test_invalid_enforcement_config_refuses_paid_runs,
+        test_live_doctor_is_capped_and_ledgered,
+        test_fallback_attempts_are_reserved_and_counted,
+        test_session_names_are_contained,
+        test_default_session_is_per_project,
+        test_stale_writers_keep_every_turn,
+        test_corrupt_session_is_kept_aside_not_overwritten,
+        test_saved_state_is_redacted,
+        test_reviewer_env_is_scrubbed,
+        test_non_review_threshold_boundary,
+        test_gate_is_coverage_aware,
+        test_gate_decision_unit,
+        test_claims_checked_against_the_packet,
+        test_manifest_records_what_was_left_out,
+        test_lock_timeout_never_proceeds_unlocked,
+        test_session_name_hardening,
+        test_redaction_at_the_load_boundary,
+        test_prune_sweeps_sidecars,
+        test_redaction_spares_code_but_not_secrets,
+        test_session_store_profile_resolution,
+        test_prompt_carries_calibration_duties,
+        test_review_round3_fixes,
+        test_prune_never_deletes_a_live_lock,
+        test_pin_lock_timeout_rescues_the_paid_turn,
+        test_binary_untracked_and_listing_failures_are_gaps,
         test_budget_caps_total_walltime,
         test_token_estimates_recorded,
         test_prune_respects_age_and_active_session,

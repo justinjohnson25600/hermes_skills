@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.1.22
+version: 1.2.0
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -51,8 +51,8 @@ Three mechanisms, in descending order of how much they can be trusted:
 
 | Mechanism | What it does | Can an agent evade it? |
 |---|---|---|
-| `daily_cap` in `config.json` | Hard ceiling on paid runs per day; the process refuses | **No** |
-| Invocation ledger | Every paid run appended before the call, with who asked | No (but it only records) |
+| `daily_cap` in `config.json` | Hard ceiling on paid ATTEMPTS per day (every fallback and every live doctor probe counts) | Not through concurrent calls; a present-but-invalid config REFUSES paid runs |
+| Invocation ledger | Every paid attempt reserved before the call (who asked, which reviewer), plus an outcome record after it | No (but it only records) |
 | `--requested-by WHO` | States who asked for this run | Yes — it is an attestation |
 
 Count-and-append happen under one file lock, so concurrent runs cannot both
@@ -64,6 +64,14 @@ If the filesystem offers no locking at all, a capped run refuses instead of
 pretending; `allow_unlocked_cap: true` opts in to an advisory cap. Keep the
 ledger on local disk: NFS/SMB can report a lock without excluding other hosts.
 With no cap set the ledger is best-effort and never blocks a review.
+
+The enforcement config is read strictly for paid paths: absent = no limits,
+valid = enforced, and **anything else (unparseable JSON, a non-object, a cap
+that is not a non-negative integer, a non-boolean `require_attestation`)
+refuses every paid run** — it is never read as "unlimited". `--dry-run` and
+`devpair audit` say `CONFIG INVALID` when that is the case. A ledger lock held
+by another run for more than 30 s refuses the attempt rather than spending
+outside the cap.
 
 ```bash
 devpair audit                 # who ran the pair, when, and who asked
@@ -104,7 +112,8 @@ the CLI, and generates a reviewer roster from your own configured providers:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/justinjohnson25600/hermes_skills/main/install.py | python3 - dev-pair
-devpair doctor        # confirm the backends answer
+devpair doctor        # static check: zero model calls, free
+devpair doctor --live --requested-by user   # PAID: one reserved, capped probe per backend
 ```
 
 Manual install: copy `devpair.py` + `test_devpair.py` into
@@ -163,8 +172,10 @@ devpair verify   --files report.md   # six-pass post-hoc critique (verify-result
 devpair audit          # who ran the pair, when, and who asked (free)
 devpair log            # everything the pair has said this session
 devpair reset          # fresh pairing session (new feature = new session)
-devpair doctor         # check reviewer backends (probed in parallel)
-devpair prune --days 30   # delete old sessions (never the active one)
+devpair doctor         # static: config, roster, CLI — zero model calls
+devpair doctor --live --requested-by user   # PAID: probes each backend (reserved + capped)
+devpair prune --days 30   # delete old sessions + stale sidecars (never an active one)
+devpair prune --redact    # one-time: rewrite stored sessions through the redactor
 ```
 
 Gating: add `--gate` to exit **2** on a failing verdict, on a highest-severity
@@ -186,6 +197,17 @@ bug, but it makes `--gate` the wrong tool for a debugging session.
 `verify` mirrors verify-results and emits `[CRITICAL]` where every other mode
 emits `[BLOCKER]`; the gate counts either, so a verify report full of
 `[CRITICAL]` findings cannot pass under an `APPROVE`.
+**The gate is coverage-aware.** Every run builds a harness-side evidence
+manifest: what was sent, which sections were truncated, which requested files or
+untracked files were left out (and why), failed `git diff` calls, and a sha256 of
+the packet. An approval on PARTIAL evidence fails the gate (exit 2) — the
+reviewer saying "I saw everything" cannot override the manifest. Pass
+`--allow-partial` to accept it deliberately; the result is then labelled PARTIAL
+on stderr and in `--json` (`coverage: partial`). Unknown coverage always fails.
+`--strict-citations` additionally fails the gate when the reviewer cites a
+`file:line` that does not exist or was not in the evidence it was sent (default:
+advisory). The reviewer is also TOLD the harness-reported gaps in its prompt.
+
 Default is advisory (always exit 0). `--budget N` caps total wall-clock across
 all backend attempts. Both are opt-in and safe to add to CI.
 
@@ -226,8 +248,12 @@ whatever providers your Hermes install has.
 ## The Rules That Make It Work
 
 1. **Give it real evidence.** `--diff`/`--files` beats describing the code. The
-   harness gathers context itself and passes it with `-t ""` (no tools), so the
-   reviewer is read-only by construction — it physically cannot edit your code.
+   harness gathers context itself and launches the reviewer with an explicit
+   ZERO-tool toolset (`-t context_engine`, override `reviewer_toolset`) plus
+   `--ignore-rules`, so it is read-only by construction and never receives your
+   SOUL/memory/AGENTS.md. (Versions ≤1.1.22 passed `-t ""`, which Hermes reads as
+   "use the config toolsets" — the reviewer had terminal/write tools under YOLO.
+   An unknown toolset name is refused by Hermes, never widened.)
 2. **`followup` is how a review becomes a conversation** — it remembers what it
    said, notices what you silently dropped, and concedes when out-argued. But it
    is another paid call: run it when the user wants the loop closed, or offer it
@@ -250,14 +276,25 @@ whatever providers your Hermes install has.
   `[VERIFIED ERROR]`/`[UNSUPPORTED CLAIM]`/`[ASSUMPTION]` labels; PASS 5 is CHECKS
   THAT WOULD SETTLE THIS, naming evidence it could not gather itself)
 
-Findings are ranked `[BLOCKER|MAJOR|MINOR]` with `file:line`. "None material" is
-a valid answer — the pair is instructed not to manufacture problems to look useful.
+Findings are ranked `[BLOCKER|MAJOR|MINOR]` with `file:line`; every BLOCKER or
+MAJOR must name the decision it changes. "None material" is a valid answer — the
+pair is instructed not to manufacture problems to look useful. Every non-verify
+review ends with `## CONFIDENCE` and `## WHAT WOULD CHANGE MY MIND` (one flip
+condition and one falsifier); the reviewer treats your question as a hypothesis
+and challenges a wrong premise first. These are prompt-level Council crossovers
+— no extra calls.
 
 ## Pitfalls
 
+- **Read the route receipt, not the banner.** Every attempt records requested vs REPORTED provider/model: inline prompts from Hermes' `--usage-file`, large (file-transport) prompts from Hermes' own session store (`state.db`, read-only) by the returned session id. `identity` is `reported-match`, `reported-mismatch` (also shouted on stderr, even with `--json`) or `unknown` — never assumed. A match is what Hermes reported, not cryptographic proof of the upstream model. Do not present a mismatched or unknown route as the requested model's endorsement; if a strict requested-provider probe fails authentication, report the blocker rather than substituting another model silently.
+- **User-requested reasoning effort is per invocation.** Confirm the installed Hermes CLI and target adapter support the requested level, then append e.g. `--reasoning max` to the native Hermes command prefix in `DEVPAIR_HERMES_CMD`; retain `--driver`, `--with` and `--requested-by user` on devpair. Do not change persistent model/config defaults for a review. `--timeout`/`--budget` limit wall-clock, not reasoning effort; elapsed time or token totals do not prove a named model ran at max.
+- **Large prompts travel by file, not argv.** Past ~30k chars on Windows (CreateProcess caps a command line at 32,767) the prompt goes through a private temp file to `hermes chat -Q --query-file --format stream-json`; `DEVPAIR_PROMPT_TRANSPORT=inline|file|auto` overrides. A forced-inline oversize prompt is reported as "too large", never as "CLI not found".
+- **Provider rate-limiting masquerades as a timeout.** An upstream HTTP 429 exhausts the CLI's 3 retries slowly and presents as "reviewer timed out after Ns". Probe cheaply (`hermes -z "Reply PROBE_OK" -m <model> --provider <p> -t context_engine --ignore-rules` — never `-t ""`, which loads every tool); an instant probe means wait for the usage-limit reset named in the failure text, then retry. A timeout kills the whole reviewer process tree.
+- **Under an MSYS/git-bash terminal `shutil.which('hermes')` fails for the child python** (POSIX-mangled PATH) — every review dies as "CLI not found" while `devpair doctor` (direct API probes) stays green. Set `DEVPAIR_HERMES_CMD` to the NATIVE absolute path of hermes.exe; bash-exported env can also vanish through extra spawn layers, so the durable fix is a self-setting shim (`if not defined DEVPAIR_HERMES_CMD set "DEVPAIR_HERMES_CMD=%~dp0hermes.exe"` in devpair.cmd).
 - **Reviewing with no evidence** produces generic advice. Attach the diff or files.
 - **Same-family review** — heed the warning, pass `--reviewer` or fix `--driver`.
-- **Huge diffs** get truncated at ~60k chars. Review in slices with `--files`.
+- **Huge diffs** get truncated at ~60k chars — the manifest records it and `--gate` will refuse an approval on it. Review in slices: `--diff-ref` takes no pathspec, so slice by committing per-area changes or by cloning the repo and restoring one file onto the base commit.
+- **A short verdict-less reply is a failed attempt**, not a review (a model expecting tools often answers "I'll check X first…"); devpair falls through to the next backend. Long verdict-less reviews are kept and fail the gate closed.
 - **Treating it as an oracle.** It has no access to your terminal, tests, or
   runtime — it reasons from what you pasted. Verify its claims before acting on
   them, especially file:line references.
@@ -266,10 +303,11 @@ a valid answer — the pair is instructed not to manufacture problems to look us
   emits a long reasoning trace before content — even a trivial probe takes
   ~2 minutes, and a real review with a large diff can exceed the 420s default.
   When falling back to local, pass `--timeout 900`.
-- **`hermes -z` needs a non-interactive env**; the wrapper handles this. Don't
-  invoke the reviewer through `hermes chat`.
-- **Run `devpair doctor` before relying on a backend** — provider auth rots
-  silently, and doctor is the cheap way to find out.
+- **`hermes -z` needs a non-interactive env**; the wrapper handles this, and
+  scrubs operator-session env (`HERMES_YOLO_MODE`, resume/session/model
+  overrides) from the reviewer's environment.
+- **`devpair doctor` is free; `doctor --live` is not** — each live probe is a
+  reserved, capped, ledgered paid attempt. Use static doctor first.
 - **Verify its findings before acting.** In the session that built this tool the
   pair raised a confident BLOCKER that was simply wrong (an IndexError that was
   impossible because of a falsy-default idiom). It conceded immediately when
@@ -336,36 +374,64 @@ a valid answer — the pair is instructed not to manufacture problems to look us
   set DEVPAIR_HERMES_CMD="C:\Program Files\Hermes\hermes.exe" --profile default
   ```
 
-- **The pair's `file:line` claims are auto-verified**, in both the `file:438`
-  and the prose `file line 438` styles. Anchors naming a missing file or a line
-  past EOF are listed under `UNVERIFIED CLAIMS` — treat those findings with extra
-  scepticism; the rest checked out against the tree. This is the net that catches
-  a reviewer citing files it was never sent — and it only works if it understands
-  the citation style the reviewer used.
+- **The pair's `file:line` claims are checked against the PACKET**, in both
+  the `file:438` and prose `file line 438` styles: a cited file that was not in
+  the evidence sent is flagged (path-suffix match, or the file appearing in the
+  packet as a location such as a traceback `File ".../x.py", line 42`), as are
+  missing files and past-EOF lines. Line ranges inside a diff are not checked,
+  so an empty problem list still does not prove the claimed defect is real.
+- **Sessions are per project, contained and redacted at rest.** The implicit
+  session belongs to the current git top-level (or cwd); another project never
+  silently continues or replays it (an explicit `--session` that belongs to a
+  different project prints a warning). Session names are validated (no paths,
+  `..`, Windows device names). Concurrent runs append under a per-session lock;
+  if a lock is held past its 30 s deadline the paid turn is saved to a
+  `<session>.turn-*.json` sidecar instead of being written unlocked. Unparseable
+  session files are quarantined (redacted), never silently overwritten. Every
+  stored turn — old ones included — is redacted when loaded.
 - **Each turn reports token estimates** and stores the parsed verdict, blocker
   count and any unverified claims on the session, so `--json` gives a caller
   everything it needs without re-parsing prose.
 
+## Offline Capability Assessment
+
+When comparing or proposing enhancements, inspect the installed implementation
+and exercise local fixtures without paid reviewer calls. Read
+`references/offline-assessment.md` for safe isolation, configuration/gate limits,
+evidence provenance and concurrent-session caveats. These are current operating
+limitations, not implemented fixes; re-check source after an upgrade.
+
 ## Tests
 
-`python3.11 test_devpair.py` (or pytest) — 69 regression tests (366 checks) pinning reviewer
-selection, self-review refusal, driver-identity precedence, session
-side-effects/atomicity, merge-base diffs, error propagation, truncation
-maths, prompt-wide redaction, and the `--gate` exit codes (driven through the
-real CLI with a stubbed backend, not asserted against source text). No network
-required. Run after any change.
+`python test_devpair.py` (or pytest) — regression suite (see Files for the
+current count) pinning reviewer selection, self-review refusal, driver-identity
+precedence, zero-tool launch and file transport, route receipts, process-tree
+timeouts, tri-state enforcement and per-attempt reservations, static/live
+doctor, session containment/per-project pointers/locking/redaction at rest,
+evidence manifests and the coverage-aware `--gate` (driven through the real CLI
+with a stubbed backend). No network required. Run after any change; set
+`DEVPAIR_HERMES_CMD` to a stub so nothing can reach a real backend.
 
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 69 regression tests (366 checks)
+- `test_devpair.py` — 99 regression tests (563 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
 
 State at runtime lives under `<hermes-home>/devpair/`: `sessions/*.json` (full
-pairing transcripts), `current_session` (pointer), `invocations.jsonl`
-(append-only run ledger, read it with `devpair audit`), and optional
-`config.json` — `order` to reorder reviewer preference, `reviewers` to declare
-your own roster, `daily_cap` for a hard ceiling on paid runs per day, and
-`require_attestation` to make `--requested-by` mandatory.
+pairing transcripts, redacted, owner-only where supported), `current_session`
+(per-project pointer map; a legacy single-name pointer is still honoured for its
+own project), `invocations.jsonl` (append-only ledger: `attempt` reservations and
+`outcome` records — read it with `devpair audit`), and optional `config.json` —
+`order` to reorder reviewer preference, `reviewers` to declare your own roster,
+`daily_cap` for a hard ceiling on paid attempts per day, `require_attestation`
+to make `--requested-by` mandatory, `reviewer_toolset` (default
+`context_engine`) and `prompt_transport` (`auto`/`inline`/`file`).
+
+**Upgrading from ≤1.1.22:** old sessions load unchanged (and are redacted on
+load); run `devpair prune --redact` once to rewrite them on disk. Old ledger
+lines without `kind` still count as paid runs. Old `independence: verified`
+labels in saved sessions describe family separation only — they were never route
+receipts.
