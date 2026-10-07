@@ -6,6 +6,7 @@ No network: every test targets selection, side-effect, and error-propagation
 logic. The one reviewer-invocation test uses a deliberately invalid provider.
 """
 import argparse
+import contextlib
 import json
 import os
 import shlex
@@ -39,10 +40,34 @@ def check(name, cond, detail=""):
     print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  — {detail}" if detail and not cond else ""))
 
 
+@contextlib.contextmanager
+def _temp_dir():
+    """A temp dir whose cleanup cannot abort the suite.
+
+    On Windows a file still held open by a child process cannot be unlinked, so
+    `TemporaryDirectory`'s cleanup raises `PermissionError [WinError 32]` from
+    `__exit__` — which propagates out of the test, kills the interpreter, and
+    discards every check that had not been flushed yet. Three fleet nodes lost
+    roughly 200 checks each to that race on `current_session.lock`, and because
+    stdout is block-buffered when redirected, each one reported the SAME
+    truncated count (a buffer boundary, not a test boundary) with no summary
+    line — so the deployer recorded `tests=-` and the install went unverified.
+
+    Leaking a temp dir is harmless; losing the signal is not. `ignore_errors`
+    also keeps this working on Python 3.8, which predates
+    `TemporaryDirectory(ignore_cleanup_errors=...)`.
+    """
+    td = tempfile.mkdtemp()
+    try:
+        yield td
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
 def isolated(fn):
     """Run fn with devpair's state redirected into a temp dir."""
     def wrapper():
-        with tempfile.TemporaryDirectory() as td:
+        with _temp_dir() as td:
             base = Path(td)
             orig = (devpair.BASE, devpair.SESSIONS, devpair.CONFIG,
                     devpair.CURRENT, devpair.LEDGER)
@@ -279,7 +304,7 @@ def test_sh_surfaces_failure(base):
 @isolated
 def test_bad_diff_ref_not_reported_as_no_diff(base):
     print("\n[errors] a bad --diff-ref is not disguised as 'no diff'")
-    with tempfile.TemporaryDirectory() as repo:
+    with _temp_dir() as repo:
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
         cwd = os.getcwd()
         os.chdir(repo)
@@ -618,7 +643,7 @@ def test_save_session_atomic_no_litter(base):
 @isolated
 def test_diff_ref_uses_merge_base(base):
     print("\n[diff] --diff-ref shows THIS branch's changes, not the ref's")
-    with tempfile.TemporaryDirectory() as repo:
+    with _temp_dir() as repo:
         def git(*a, **kw):
             subprocess.run(["git", *a], cwd=repo, check=True,
                            capture_output=True, **kw)
@@ -657,7 +682,7 @@ def test_no_phantom_cmd_from_subcommand():
     # The subparser dest used to be 'cmd' with set_defaults(cmd="pair"), so
     # every run without -c executed a phantom `bash -lc pair`. Pin it via the
     # real CLI: a dry-run must not produce a 'pair failed' note.
-    with tempfile.TemporaryDirectory() as td:
+    with _temp_dir() as td:
         r = subprocess.run(
             [sys.executable, str(Path(devpair.__file__)), "review",
              "--driver", "kimi-coding/kimi-k3", "--dry-run"],
@@ -673,7 +698,7 @@ def test_no_phantom_cmd_from_subcommand():
 @isolated
 def test_secrets_never_reach_the_prompt(base):
     print("\n[secrets] credentials are redacted before leaving the machine")
-    with tempfile.TemporaryDirectory() as repo:
+    with _temp_dir() as repo:
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True,
                        capture_output=True)
         subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
@@ -831,7 +856,7 @@ def test_pick_reviewer_honours_driver(base):
 @isolated
 def test_untracked_files_are_read_not_just_named(base):
     print("\n[context] brand-new files reach the reviewer as CODE, not just a filename")
-    with tempfile.TemporaryDirectory() as repo:
+    with _temp_dir() as repo:
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True,
                        capture_output=True)
         subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
@@ -1089,7 +1114,7 @@ def test_gate_exit_code_end_to_end(base):
 @isolated
 def test_verify_claims_catches_hallucinated_anchors(base):
     print("\n[claims] hallucinated file:line anchors are flagged")
-    with tempfile.TemporaryDirectory() as td:
+    with _temp_dir() as td:
         (Path(td) / "real.py").write_text("a = 1\nb = 2\nc = 3\n")
         resp = ("[BLOCKER] real.py:2 — fine\n"
                 "[MAJOR] real.py:999 — past EOF\n"
@@ -1133,7 +1158,7 @@ def test_doctor_probes_in_parallel():
         return True, "OK"
 
     saved_rr, saved_roster = devpair.run_reviewer, dict(devpair.REVIEWERS)
-    with tempfile.TemporaryDirectory() as td:
+    with _temp_dir() as td:
         orig = (devpair.BASE, devpair.CONFIG, devpair.LEDGER)
         devpair.BASE, devpair.CONFIG, devpair.LEDGER = Path(td), Path(td) / "config.json", Path(td) / "l.jsonl"
         devpair.run_reviewer = slow_ok
@@ -1786,7 +1811,7 @@ def test_banner_survives_a_legacy_console_encoding():
     # Windows console defaults to a legacy code page, and printing the result
     # raised UnicodeEncodeError *after* the reviewer had answered and the ledger
     # entry was written. The user paid for a review and received a traceback.
-    with tempfile.TemporaryDirectory() as td:
+    with _temp_dir() as td:
         script = Path(td) / "emit.py"
         # cp1252 cannot represent U+2500; the guard must downgrade, not die.
         script.write_text(
@@ -1834,7 +1859,7 @@ def _resolver_checks():
     # CreateProcess, which only appends .exe — so the shim the manual-install
     # instructions tell people to create was invisible. shutil.which walks
     # PATHEXT properly.
-    with tempfile.TemporaryDirectory() as td:
+    with _temp_dir() as td:
         d = Path(td)
         ext = ".cmd" if os.name == "nt" else ""
         shim = d / f"hermes{ext}"
@@ -1910,7 +1935,7 @@ def _resolver_checks():
 def test_hermes_home_resolution_is_portable():
     print("\n[portable] state lands in THIS machine's hermes home, not a guess")
     import importlib
-    with tempfile.TemporaryDirectory() as td:
+    with _temp_dir() as td:
         fake = Path(td) / "custom-home"
         (fake / "skills").mkdir(parents=True)
         old = os.environ.get("HERMES_HOME")

@@ -2,6 +2,32 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.2 — 2026-10-07
+
+Test-harness reliability fix. No change to shipped behaviour; `devpair.py` is
+untouched.
+
+- **A temp-dir cleanup race no longer destroys most of the suite.** Every
+  `tempfile.TemporaryDirectory()` in the tests is now a `_temp_dir()` helper
+  that removes the directory with `ignore_errors=True`. On Windows a file still
+  held open by a child process cannot be unlinked, so cleanup raised
+  `PermissionError [WinError 32]` on `current_session.lock` *from `__exit__`* —
+  which escaped the test, killed the interpreter, and discarded every check not
+  yet flushed.
+
+  Two things made it hard to see. Because stdout is block-buffered when
+  redirected, three different nodes all reported the SAME truncated count (a
+  buffer boundary, not a test boundary) and no summary line — so the fleet
+  deployer recorded `tests=-` and those installs went unverified while looking
+  installed. And it is intermittent: the same node completed under one
+  invocation and aborted under another.
+
+  Verified red→green on a reproducing node: 352 checks / aborted / 2
+  `PermissionError`s → **563 passed, 0 failed, 0 errors** — 211 checks of signal
+  recovered. macOS unchanged at 559. Leaking a temp dir is harmless; losing the
+  signal is not. `ignore_errors` also keeps the helper working on Python 3.8,
+  which predates `TemporaryDirectory(ignore_cleanup_errors=...)`.
+
 ## 1.2.1 — 2026-10-07
 
 Test portability fix. No change to shipped behaviour; `devpair.py` is untouched.
