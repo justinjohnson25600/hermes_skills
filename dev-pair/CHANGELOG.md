@@ -2,6 +2,28 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.1 — 2026-10-07
+
+Test portability fix. No change to shipped behaviour; `devpair.py` is untouched.
+
+- **The suite no longer depends on `bash` being a working shell.**
+  `test_sh_surfaces_failure` drove `sh()` through `["bash", "-lc", ...]`. On a
+  Windows box where the WSL stub (`WindowsApps\bash.exe`) precedes Git Bash on
+  `PATH`, that stub answers every invocation with UTF-16LE "Windows Subsystem for
+  Linux has no installed distributions" / "A connection attempt failed" and
+  exit 1, so five checks failed on one node and four on another — while a third
+  node passed purely because Git Bash happened to come first. The checks now run
+  through `sys.executable`, which exists and behaves identically everywhere; the
+  seam under test (stdout, stderr and exit-code surfacing) is unchanged.
+  Verified red→green on both affected nodes: 558/563 → 563 passed/0 failed, and
+  4 failures → 0. Check count is unchanged on macOS (559; the 4-check difference
+  from Windows is the platform-guarded `_fits_inline` argv-limit checks).
+
+  Production code was never affected: `--cmd` already selects `cmd /c` on
+  Windows. This was a defect in the test's own portability, of exactly the class
+  `references/cross-platform-python-portability.md` describes — a green suite on
+  the origin OS is evidence about the origin OS only.
+
 ## 1.2.0 — 2026-10-06
 
 Security and accounting release. Every change was developed test-first (each new

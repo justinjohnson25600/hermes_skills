@@ -253,14 +253,27 @@ def test_dry_run_creates_nothing(base):
 @isolated
 def test_sh_surfaces_failure(base):
     print("\n[errors] context commands never fail silently")
-    out, note = devpair.sh(["bash", "-lc", "printf out; printf BOOM >&2; exit 7"], want_status=True)
+    # Drive sh() through THIS interpreter, not a shell. "bash" is not a portable
+    # command: on a Windows box where the WSL stub (WindowsApps\bash.exe) sits
+    # ahead of Git Bash on PATH, it answers every invocation with UTF-16LE
+    # "no installed distributions" and exit 1, so these checks failed on two
+    # estate nodes while passing on a third purely because of PATH order.
+    # sys.executable is the one interpreter guaranteed to exist and behave
+    # identically on every platform, and the seam under test (stdout/stderr/exit
+    # surfacing) does not care what produced the output.
+    def py(code):
+        return [sys.executable, "-c", code]
+
+    out, note = devpair.sh(
+        py("import sys; sys.stdout.write('out'); sys.stderr.write('BOOM'); sys.exit(7)"),
+        want_status=True)
     check("stdout still captured", out == "out", f"got {out!r}")
     check("non-zero exit reported", "exit 7" in note, f"got {note!r}")
     check("stderr included in note", "BOOM" in note, f"got {note!r}")
-    out2, note2 = devpair.sh(["bash", "-lc", "echo fine"], want_status=True)
+    out2, note2 = devpair.sh(py("print('fine')"), want_status=True)
     check("success -> empty note", note2 == "" and out2 == "fine")
     check("legacy single-return form still works",
-          devpair.sh(["bash", "-lc", "echo x"]) == "x")
+          devpair.sh(py("print('x')")) == "x")
 
 
 @isolated

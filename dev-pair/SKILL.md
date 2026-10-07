@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.0
+version: 1.2.1
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -415,7 +415,7 @@ with a stubbed backend). No network required. Run after any change; set
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 99 regression tests (563 checks)
+- `test_devpair.py` — 99 regression tests (559 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
