@@ -468,7 +468,7 @@ with a stubbed backend). No network required. Run after any change; set
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 104 regression tests (585 checks)
+- `test_devpair.py` — 104 regression tests (586 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

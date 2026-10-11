@@ -4,7 +4,7 @@ Semver, newest first. Patch increments (+0.0.1) per published change.
 
 ## 1.2.4 — 2026-10-11
 
-Three defects found while rolling 1.2.3 out to eleven machines. No interface
+Four defects found while rolling 1.2.3 out to eleven machines. No interface
 changes; session names gain four characters.
 
 - **The Windows command no longer dies when Hermes updates.** `devpair.cmd`
@@ -25,6 +25,19 @@ changes; session names gain four characters.
   bits, so 20 names generated in the same second collided about once in 500
   tries (measured: 4 in 2,000) — a real, if rare, way for two unpinned runs to
   share a session. It is now 32 bits, and a check pins the width.
+- **The test suite no longer writes to your real dev-pair state.** A test that
+  launched `devpair.py` as a child process built its environment from the
+  parent's alone, so every suite run (every install verify, every fleet deploy)
+  appended eight "unattributed" verify attempts, a session and a
+  `current_session` entry to the REAL state. Those attempts counted against
+  `daily_cap` and appeared in `devpair audit` as real reviews: on the
+  development machine, 288 of one day's 292 recorded attempts were test runs.
+  The suite now points itself and every child at a throwaway `DEVPAIR_HOME`,
+  the offending test isolates explicitly, and a closing check fails if any
+  record or session from the run reached the real state (red with the fix
+  removed: 9 items). Records written by earlier runs stay where they are,
+  because the ledger is append-only; they are recognisable by
+  `requested_by: unattributed` and a temp-directory `cwd`.
 - **Verify output is decoded as UTF-8** by the installer, so a test name with
   an em dash can no longer turn a passing run into "verify could not run" on a
   Windows console code page.

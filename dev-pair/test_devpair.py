@@ -20,6 +20,19 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# NO-REAL-STATE GUARD. This suite runs on every install and every fleet deploy.
+# A test that launches devpair.py as a child does not inherit @isolated's
+# patched globals, and one built its environment from os.environ alone, so each
+# run wrote eight "unattributed" attempts, a session and a current_session entry
+# into the REAL state: counted against the real daily_cap and listed by
+# `devpair audit` as real reviews. Point the module and every child at a
+# throwaway DEVPAIR_HOME before devpair is imported; tests that need a specific
+# home still set their own.
+_REAL_DEVPAIR_HOME = os.environ.get("DEVPAIR_HOME")
+SUITE_STATE = Path(tempfile.mkdtemp(prefix="devpair-suite-"))
+os.environ["DEVPAIR_HOME"] = str(SUITE_STATE)
+
 import devpair  # noqa: E402
 
 # NO-NETWORK GUARD. The suite is run directly by install.py (on every fleet box)
@@ -574,6 +587,7 @@ def test_json_output_carries_route_receipts(base):
     ev.write_text("x = 1\n", encoding="utf-8")
     env = dict(os.environ, DEVPAIR_HERMES_CMD=stub, DEVPAIR_DRIVER_MODEL="claude-opus-5",
                DEVPAIR_DRIVER_PROVIDER="anthropic", HERMES_HOME=str(base))
+    env.pop("DEVPAIR_HOME", None)   # isolated by HERMES_HOME; the suite default would win
     r = subprocess.run([sys.executable, str(Path(devpair.__file__)), "critique",
                         "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--json",
                         "--session", "rcpt"],
@@ -1205,6 +1219,7 @@ def test_gate_exit_code_end_to_end(base):
     env["DEVPAIR_HERMES_CMD"] = stub_cmd
     env["DEVPAIR_DRIVER_MODEL"] = "claude-opus-5"
     env["DEVPAIR_DRIVER_PROVIDER"] = "anthropic"
+    env["DEVPAIR_HOME"] = str(base)   # a child process does not see @isolated's globals
 
     def run(reply, *extra):
         write_stub(reply)
@@ -1566,6 +1581,7 @@ def test_gate_is_coverage_aware(base):
     big.write_text("".join(f"x_{i} = {i}\n" for i in range(6000)), encoding="utf-8")
     env = dict(os.environ, DEVPAIR_DRIVER_MODEL="claude-opus-5", DEVPAIR_DRIVER_PROVIDER="anthropic",
                HERMES_HOME=str(base))
+    env.pop("DEVPAIR_HOME", None)   # isolated by HERMES_HOME; the suite default would win
 
     def run(stub, *extra):
         env["DEVPAIR_HERMES_CMD"] = stub
@@ -3051,7 +3067,59 @@ def test_git_using_tests_are_guarded():
     check("no git-using test can abort a machine without git", not unguarded, f"unguarded: {unguarded}")
 
 
+def _real_state_dir():
+    """Where devpair keeps state when this suite has not redirected it."""
+    if _REAL_DEVPAIR_HOME:
+        return Path(_REAL_DEVPAIR_HOME)
+    return devpair._resolve_hermes_home() / "devpair"
+
+
+def _real_state_snapshot():
+    real = _real_state_dir()
+    led = real / "invocations.jsonl"
+    sessions = real / "sessions"
+    return {"dir": real,
+            "ledger_size": led.stat().st_size if led.is_file() else 0,
+            "sessions": {p.name for p in sessions.glob("*.json")} if sessions.is_dir() else set()}
+
+
+def check_real_state_untouched(snap):
+    print("\n[isolation] the suite never writes to the real dev-pair state")
+    tmp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+
+    def from_suite(path):
+        # Every test works under the temp dir; real use essentially never does.
+        return bool(path) and os.path.normcase(os.path.realpath(path)).startswith(tmp)
+
+    real = snap["dir"]
+    leaked = []
+    led = real / "invocations.jsonl"
+    if led.is_file() and led.stat().st_size > snap["ledger_size"]:
+        with open(led, "rb") as fh:
+            fh.seek(snap["ledger_size"])
+            for line in fh.read().decode("utf-8", errors="replace").splitlines():
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if from_suite(rec.get("cwd")):
+                    leaked.append(f"ledger {rec.get('kind')} {rec.get('mode')} cwd={rec.get('cwd')}")
+    sessions = real / "sessions"
+    for p in (sessions.glob("*.json") if sessions.is_dir() else []):
+        if p.name in snap["sessions"]:
+            continue
+        try:
+            project = json.loads(p.read_text(encoding="utf-8")).get("project")
+        except (OSError, ValueError):
+            continue
+        if from_suite(project):
+            leaked.append(f"session {p.name} project={project}")
+    check("no ledger record or session from this run reached the real state", not leaked,
+          f"{len(leaked)} written to {real}: {leaked[:3]}")
+
+
 def main():
+    snap = _real_state_snapshot()
     print("devpair regression tests")
     print("=" * 60)
     for t in (
@@ -3161,6 +3229,8 @@ def main():
         test_git_using_tests_are_guarded,
     ):
         t()
+    check_real_state_untouched(snap)
+    shutil.rmtree(SUITE_STATE, ignore_errors=True)
     if SKIPPED:
         print(f"\n{len(SKIPPED)} test(s) skipped, git not on PATH: {', '.join(SKIPPED)}")
     print("\n" + "=" * 60)
