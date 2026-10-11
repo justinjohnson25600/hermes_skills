@@ -946,9 +946,10 @@ def active_session_names() -> set[str]:
 def _new_session_name() -> str:
     """A timestamp name that is not already taken. Callers that pin it hold the
     CURRENT lock across choose-and-pin, so two processes never pick the same
-    name; the short random suffix also keeps unpinned names (chosen at the start
-    of a run, pinned only after the review) from colliding across processes."""
-    base = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
+    name; the random suffix also keeps unpinned names (chosen at the start of a
+    run, pinned only after the review) from colliding across processes. It is
+    32 bits: 16 bits let 20 names in one second collide about 1 time in 500."""
+    base = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(4).hex()
     taken = active_session_names()
     name, n = base, 2
     while (SESSIONS / f"{name}.json").exists() or name in taken:

@@ -119,7 +119,34 @@ def write_shim(name: str, target: Path, py: str, dry: bool) -> Path:
     dest_dir = bin_dir()
     dest = dest_dir / (f"{name}.cmd" if IS_WIN else name)
     if IS_WIN:
-        body = f'@echo off\r\n"{py}" "{target}" %*\r\n'
+        # A Hermes update can replace the environment that `py` lives in, which
+        # left every devpair.cmd pointing at a deleted python.exe. Fall back the
+        # way the POSIX shim does: the git-install venv, then whichever managed
+        # environment this home has now, then the py launcher.
+        home = resolve_hermes_home()
+        body = "\r\n".join([
+            "@echo off",
+            f"rem {name} - installed by hermes_skills/install.py",
+            "setlocal EnableExtensions",
+            f'set "TARGET={target}"',
+            f'set "PY={py}"',
+            'if exist "%PY%" goto run',
+            f'set "PY={home}\\hermes-agent\\venv\\Scripts\\python.exe"',
+            'if exist "%PY%" goto run',
+            f'for /d %%E in ("{home}\\installs\\*") do for /d %%V in ("%%E\\environments\\*") do '
+            'if exist "%%V\\venv\\Scripts\\python.exe" set "PY=%%V\\venv\\Scripts\\python.exe"',
+            'if exist "%PY%" goto run',
+            "where py >nul 2>&1 && goto runpy",
+            f"echo {name}: no working python found 1>&2",
+            "exit /b 127",
+            ":runpy",
+            'py -3 "%TARGET%" %*',
+            "exit /b %ERRORLEVEL%",
+            ":run",
+            '"%PY%" "%TARGET%" %*',
+            "exit /b %ERRORLEVEL%",
+            "",
+        ])
     else:
         body = (
             "#!/bin/bash\n"
@@ -273,6 +300,30 @@ def build_reviewer_config(home: Path, state_dir: Path, dry: bool) -> None:
 
 
 # --------------------------------------------------------------------------
+def _run_verify(py: str, target: Path, cwd: Path | None) -> int:
+    """Run a skill's test file. 0 passed, 1 failed, 2 could not run.
+
+    Output is decoded as UTF-8 with replacement: test names carry em dashes,
+    and a cp1252 decode error used to surface as "could not run".
+    """
+    log(f"verifying: {target.name}")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    try:
+        r = subprocess.run([py, str(target)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=300,
+                           cwd=str(cwd) if cwd else None, env=env)
+    except Exception as e:
+        log(f"verify could not run: {e}")
+        return 2
+    for line in (r.stdout or r.stderr or "").strip().splitlines()[-3:]:
+        log(f"  {line}")
+    if r.returncode != 0:
+        log("VERIFY FAILED — the skill is installed but not proven working.")
+        return 1
+    log("verify passed.")
+    return 0
+
+
 def install(skill: str, dry: bool, run_verify: bool) -> int:
     manifest_raw = fetch(f"{skill}/skill.json")
     manifest = {}
@@ -316,13 +367,22 @@ def install(skill: str, dry: bool, run_verify: bool) -> int:
         dest.write_text(body, encoding="utf-8")
         log(f"skill file: {dest}")
 
+    py = sys.executable or ("python" if IS_WIN else "python3")
+
+    # verify_skill: tests that ship beside SKILL.md (a skill with helper
+    # scripts but no state dir) still prove the install on every machine.
+    # Unlike `verify`, a test run that cannot start is a failure here.
+    vs = manifest.get("verify_skill")
+    if vs and run_verify and not dry:
+        if _run_verify(py, skills_dir / vs, skills_dir) != 0:
+            return 1
+
     files = manifest.get("files", [])
     if not files:
         log("markdown-only skill — nothing else to install.")
         return 0
 
     state_dir = home / manifest.get("state_dir", skill)
-    py = sys.executable or ("python" if IS_WIN else "python3")
     for f in files:
         body = fetch(f"{skill}/{f}")
         if body is None:
@@ -345,20 +405,9 @@ def install(skill: str, dry: bool, run_verify: bool) -> int:
 
     verify = manifest.get("verify")
     if verify and run_verify and not dry:
-        log(f"verifying: {verify}")
         target = state_dir / verify.replace("{entry}", entry or "")
-        try:
-            r = subprocess.run([py, str(target)], capture_output=True,
-                               text=True, timeout=300)
-            tail = (r.stdout or r.stderr or "").strip().splitlines()[-3:]
-            for line in tail:
-                log(f"  {line}")
-            if r.returncode != 0:
-                log("VERIFY FAILED — the skill is installed but not proven working.")
-                return 1
-            log("verify passed.")
-        except Exception as e:
-            log(f"verify could not run: {e}")
+        if _run_verify(py, target, None) == 1:
+            return 1
 
     log("")
     log(f"Done. Next: {manifest.get('next_step', 'see the skill README')}")

@@ -7,6 +7,7 @@ logic. The one reviewer-invocation test uses a deliberately invalid provider.
 """
 import argparse
 import contextlib
+import functools
 import json
 import os
 import re
@@ -39,6 +40,28 @@ PASS, FAIL = [], []
 def check(name, cond, detail=""):
     (PASS if cond else FAIL).append(name)
     print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  — {detail}" if detail and not cond else ""))
+
+
+SKIPPED = []
+
+
+def needs_git(fn):
+    """Skip a test, visibly, where git is not on PATH.
+
+    These tests build a throwaway repository. On a machine without git the
+    first `git init` raised FileNotFoundError and aborted the whole suite with
+    no summary line, so the deployer recorded `tests=-` and nothing at all was
+    verified. Skipping only these keeps every other check meaningful, and the
+    lower count still stands out next to peer machines.
+    """
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        if shutil.which("git") is None:
+            SKIPPED.append(fn.__name__)
+            print(f"\n[skip] {fn.__name__}: git not on PATH")
+            return None
+        return fn(*a, **kw)
+    return wrapper
 
 
 @contextlib.contextmanager
@@ -303,6 +326,7 @@ def test_sh_surfaces_failure(base):
 
 
 @isolated
+@needs_git
 def test_bad_diff_ref_not_reported_as_no_diff(base):
     print("\n[errors] a bad --diff-ref is not disguised as 'no diff'")
     with _temp_dir() as repo:
@@ -790,6 +814,7 @@ def test_save_session_atomic_no_litter(base):
 
 # --- merge-base diff semantics ------------------------------------------------
 @isolated
+@needs_git
 def test_diff_ref_uses_merge_base(base):
     print("\n[diff] --diff-ref shows THIS branch's changes, not the ref's")
     with _temp_dir() as repo:
@@ -845,6 +870,7 @@ def test_no_phantom_cmd_from_subcommand():
 
 # --- SECRETS: nothing credential-shaped may reach a third-party API ----------
 @isolated
+@needs_git
 def test_secrets_never_reach_the_prompt(base):
     print("\n[secrets] credentials are redacted before leaving the machine")
     with _temp_dir() as repo:
@@ -1003,6 +1029,7 @@ def test_pick_reviewer_honours_driver(base):
 
 # --- new code must actually be visible to the reviewer ------------------------
 @isolated
+@needs_git
 def test_untracked_files_are_read_not_just_named(base):
     print("\n[context] brand-new files reach the reviewer as CODE, not just a filename")
     with _temp_dir() as repo:
@@ -1439,6 +1466,7 @@ def test_session_names_are_contained(base):
 
 
 @isolated
+@needs_git
 def test_default_session_is_per_project(base):
     print("\n[sessions] the implicit session belongs to ONE project; B never replays A's review")
     a, b = base / "projA", base / "projB"
@@ -1617,6 +1645,7 @@ def test_claims_checked_against_the_packet(base):
 
 
 @isolated
+@needs_git
 def test_manifest_records_what_was_left_out(base):
     print("\n[manifest] gather() records clipped and omitted evidence, and the paths sent")
     subprocess.run(["git", "init", "-q", str(base)], capture_output=True)
@@ -1719,6 +1748,7 @@ def test_pin_lock_timeout_rescues_the_paid_turn(base):
 
 
 @isolated
+@needs_git
 def test_binary_untracked_and_listing_failures_are_gaps(base):
     print("\n[manifest] a binary untracked file is an omission, not silence")
     subprocess.run(["git", "init", "-q", str(base)], capture_output=True)
@@ -1772,6 +1802,8 @@ def test_session_name_hardening(base):
     check("ordinary names still fine", devpair._valid_session_name("nullable-2") and devpair._valid_session_name("console1"))
     names = {devpair._new_session_name() for _ in range(20)}
     check("same-second names are distinct", len(names) == 20, len(names))
+    suffix = devpair._new_session_name().split("-")[2]
+    check("the random suffix carries at least 32 bits", re.fullmatch(r"[0-9a-f]{8,}", suffix) is not None, suffix)
     # Provisional name taken by ANOTHER project while our review ran.
     seq = iter(["provisional-1", "fresh-2", "fresh-3"])
     saved_n, saved_rr, saved_g = devpair._new_session_name, devpair.run_reviewer, devpair.gather
@@ -2979,6 +3011,46 @@ def test_verify_template_matches_the_verify_results_skill(base):
         check(f"gate can parse verdict {v!r}", parsed == v, f"got {parsed!r}")
 
 
+def test_missing_git_skips_instead_of_aborting():
+    print("\n[portability] a missing git skips the test; it does not abort the suite")
+    ran = []
+
+    @needs_git
+    def probe():
+        ran.append(1)
+
+    real, before = shutil.which, len(SKIPPED)
+    try:
+        shutil.which = lambda *a, **k: None
+        probe()
+        check("git-dependent test skipped without running", not ran and len(SKIPPED) == before + 1,
+              f"ran={ran} skipped={SKIPPED[before:]}")
+    finally:
+        shutil.which = real
+        del SKIPPED[before:]
+    probe()
+    del SKIPPED[before:]   # the probe is not a real test; keep it out of the summary
+    check("…and runs normally when git is present", bool(ran) == (shutil.which("git") is not None))
+
+
+def test_git_using_tests_are_guarded():
+    print("\n[portability] every test that builds a git repo is marked @needs_git")
+    src = Path(__file__).read_text(encoding="utf-8")
+    defs = list(re.finditer(r"^((?:@[\w.]+\n)*)def (\w+)\(", src, re.M))
+    unguarded, git_tests = [], []
+    for i, m in enumerate(defs):
+        name = m.group(2)
+        if not name.startswith("test_") or name == "test_git_using_tests_are_guarded":
+            continue
+        body = src[m.end():defs[i + 1].start() if i + 1 < len(defs) else len(src)]
+        if '["git"' in body:
+            git_tests.append(name)
+            if "@needs_git" not in m.group(1):
+                unguarded.append(name)
+    check("the scan finds the git-using tests (not vacuous)", len(git_tests) >= 7, f"found {git_tests}")
+    check("no git-using test can abort a machine without git", not unguarded, f"unguarded: {unguarded}")
+
+
 def main():
     print("devpair regression tests")
     print("=" * 60)
@@ -3085,8 +3157,12 @@ def main():
         test_verify_mode_is_wired_into_the_cli,
         test_verdict_regex_tolerates_real_model_formatting,
         test_verify_template_matches_the_verify_results_skill,
+        test_missing_git_skips_instead_of_aborting,
+        test_git_using_tests_are_guarded,
     ):
         t()
+    if SKIPPED:
+        print(f"\n{len(SKIPPED)} test(s) skipped, git not on PATH: {', '.join(SKIPPED)}")
     print("\n" + "=" * 60)
     print(f"{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:

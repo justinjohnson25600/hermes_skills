@@ -2,6 +2,33 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.4 — 2026-10-11
+
+Three defects found while rolling 1.2.3 out to eleven machines. No interface
+changes; session names gain four characters.
+
+- **The Windows command no longer dies when Hermes updates.** `devpair.cmd`
+  named one interpreter, and a Hermes update that replaced its environment
+  left the command pointing at a deleted `python.exe` ("The system cannot find
+  the path specified"). The shim now falls back the way the POSIX one always
+  has: the recorded interpreter, then the git-install venv, then whichever
+  managed environment the Hermes home has now, then the `py` launcher.
+  (Installer change in `install.py`; reinstall to get the new shim.)
+- **The test suite runs on machines without git.** Seven tests build a
+  throwaway repository; on a machine without git the first `git init` raised
+  `FileNotFoundError`, the suite aborted with no summary, and the installer
+  recorded no result at all. Those seven now skip with a `[skip]` line and a
+  summary of what was skipped; every other check still runs. A static check
+  fails if a future test runs git without the guard (red on 1.2.3: all seven
+  named).
+- **Session names cannot collide within a second.** The random suffix was 16
+  bits, so 20 names generated in the same second collided about once in 500
+  tries (measured: 4 in 2,000) — a real, if rare, way for two unpinned runs to
+  share a session. It is now 32 bits, and a check pins the width.
+- **Verify output is decoded as UTF-8** by the installer, so a test name with
+  an em dash can no longer turn a passing run into "verify could not run" on a
+  Windows console code page.
+
 ## 1.2.3 — 2026-10-11
 
 Run identity for callers, isolated state, and two warnings that used to be
