@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+
+# Fleet roster: real hosts and identifiers. Lives in the private fleetops repo.
+agents.json
