@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.2
+version: 1.2.3
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -84,6 +84,14 @@ exactly where an agent self-initiating would show up. Set a ceiling with
 `{"daily_cap": 10}` in `<hermes-home>/devpair/config.json`; add
 `{"require_attestation": true}` to make `--requested-by` mandatory.
 
+To find the calls one task made, match by `run_id`. Every result carries it (in
+`--json`, the human footer, and the `FAILED` line when no backend answered), and
+each ledger attempt records it with the session name, joined to its outcome in
+`devpair audit --json` (its `runs` list). Never reason from global daily counts.
+On dev-pair 1.2.2 and older the ledger had no session name and `--json` had no
+`run_id`; there, filter by working directory, reviewer and time window, and run
+each batch from its own directory when attribution matters.
+
 **When you call devpair on the user's behalf, pass `--requested-by user`.** Do
 not pass it otherwise — an attestation you filled in yourself is worse than
 none, because it launders an unasked-for run as an authorised one.
@@ -104,6 +112,49 @@ it is the user's call, not a hard block.
 If they name a roster entry instead ("use kimi"), `--reviewer kimi` is the
 shorter form. If they express no preference, let the tool pick the first
 independent reviewer and **tell them which model answered** so they can redirect.
+
+### More than one reviewer (a panel)
+
+If the user asks for several reviewers, each one is a separate paid run, and two
+defaults quietly break their independence:
+
+- **Name each reviewer** (`--with` or `--reviewer`). Auto-pick always takes the
+  first independent entry in the roster, so unnamed runs all reach the same model.
+- **Give each reviewer its own `--session NAME`.** The implicit session belongs
+  to the project, and later runs in it are sent the earlier turns, so the second
+  reviewer would read the first one's critique and anchor on it. Separate
+  sessions also keep each thread open for its own `followup`.
+
+Send every reviewer the same revision of the artefact. Then triage every finding
+from all of them (accepted, partly accepted, or rejected with the reason) into a
+single revision. Where reviewers contradict each other, make the call yourself
+and show the user both positions and your resolution. Never average them or drop
+the minority view. Report one row per reviewer: verdict, finding counts by
+severity, the model the route receipt says answered, coverage, and the evidence
+`sha256` (which revision it saw). Attribute each adopted change to its source
+(which reviewer, or you), and say where you departed from a reviewer's proposal
+and why.
+
+Running the panel:
+
+- **Launch reviewers in parallel**, one background process each with its own
+  `--session` and its own `--json` output file. The ledger and cap are locked,
+  so concurrent runs are safe; running them one after another only doubles the
+  wait.
+- **Write your own findings list before opening any review.** Reading theirs
+  first anchors you; comparing afterwards shows what only you caught and what
+  you missed.
+- **A second round on a revised artefact is a `followup` on each reviewer's own
+  session** (paid again, so only when the user asks), with the new revision
+  attached as evidence. Each reviewer re-checks its own earlier findings against
+  the revision while staying blind to the others; ask it to lead with any
+  earlier finding the revision integrated wrongly or incompletely.
+- **After triage, probe every claim the artefact makes about real tools**: read
+  the source, run `--help` or a dry run, inspect the actual data. Reviewers only
+  read the text, so an artefact that misdescribes a tool passes all of them.
+- **Anything you add after the last review is unreviewed.** Mark it so in the
+  artefact and in your report, and put it before the panel at the next gate
+  rather than presenting it as endorsed.
 
 ## Setup
 
@@ -203,7 +254,9 @@ untracked files were left out (and why), failed `git diff` calls, and a sha256 o
 the packet. An approval on PARTIAL evidence fails the gate (exit 2) — the
 reviewer saying "I saw everything" cannot override the manifest. Pass
 `--allow-partial` to accept it deliberately; the result is then labelled PARTIAL
-on stderr and in `--json` (`coverage: partial`). Unknown coverage always fails.
+on stderr and in `--json` (`coverage: partial`). Without `--gate` a partial
+packet stays advisory but is still announced on stderr (`EVIDENCE PARTIAL`, even
+with `--json`). Unknown coverage always fails.
 `--strict-citations` additionally fails the gate when the reviewer cites a
 `file:line` that does not exist or was not in the evidence it was sent (default:
 advisory). The reviewer is also TOLD the harness-reported gaps in its prompt.
@@ -289,11 +342,11 @@ and challenges a wrong premise first. These are prompt-level Council crossovers
 - **Read the route receipt, not the banner.** Every attempt records requested vs REPORTED provider/model: inline prompts from Hermes' `--usage-file`, large (file-transport) prompts from Hermes' own session store (`state.db`, read-only) by the returned session id. `identity` is `reported-match`, `reported-mismatch` (also shouted on stderr, even with `--json`) or `unknown` — never assumed. A match is what Hermes reported, not cryptographic proof of the upstream model. Do not present a mismatched or unknown route as the requested model's endorsement; if a strict requested-provider probe fails authentication, report the blocker rather than substituting another model silently.
 - **User-requested reasoning effort is per invocation.** Confirm the installed Hermes CLI and target adapter support the requested level, then append e.g. `--reasoning max` to the native Hermes command prefix in `DEVPAIR_HERMES_CMD`; retain `--driver`, `--with` and `--requested-by user` on devpair. Do not change persistent model/config defaults for a review. `--timeout`/`--budget` limit wall-clock, not reasoning effort; elapsed time or token totals do not prove a named model ran at max.
 - **Large prompts travel by file, not argv.** Past ~30k chars on Windows (CreateProcess caps a command line at 32,767) the prompt goes through a private temp file to `hermes chat -Q --query-file --format stream-json`; `DEVPAIR_PROMPT_TRANSPORT=inline|file|auto` overrides. A forced-inline oversize prompt is reported as "too large", never as "CLI not found".
-- **Provider rate-limiting masquerades as a timeout.** An upstream HTTP 429 exhausts the CLI's 3 retries slowly and presents as "reviewer timed out after Ns". Probe cheaply (`hermes -z "Reply PROBE_OK" -m <model> --provider <p> -t context_engine --ignore-rules` — never `-t ""`, which loads every tool); an instant probe means wait for the usage-limit reset named in the failure text, then retry. A timeout kills the whole reviewer process tree.
+- **Provider rate-limiting masquerades as a timeout.** An upstream HTTP 429 exhausts the CLI's 3 retries slowly and presents as "reviewer timed out after Ns". Probe cheaply (`hermes -z "Reply PROBE_OK" -m <model> --provider <p> -t context_engine --ignore-rules` — never `-t ""`, which loads every tool); if the probe fails fast with a usage limit, wait for the reset time named in the failure text and probe again. Spend the paid review only once a probe answers: a review sent into a live limit still burns a capped attempt plus minutes of timeout. A timeout kills the whole reviewer process tree.
 - **Under an MSYS/git-bash terminal `shutil.which('hermes')` fails for the child python** (POSIX-mangled PATH) — every review dies as "CLI not found" while `devpair doctor` (direct API probes) stays green. Set `DEVPAIR_HERMES_CMD` to the NATIVE absolute path of hermes.exe; bash-exported env can also vanish through extra spawn layers, so the durable fix is a self-setting shim (`if not defined DEVPAIR_HERMES_CMD set "DEVPAIR_HERMES_CMD=%~dp0hermes.exe"` in devpair.cmd).
 - **Reviewing with no evidence** produces generic advice. Attach the diff or files.
 - **Same-family review** — heed the warning, pass `--reviewer` or fix `--driver`.
-- **Huge diffs** get truncated at ~60k chars — the manifest records it and `--gate` will refuse an approval on it. Review in slices: `--diff-ref` takes no pathspec, so slice by committing per-area changes or by cloning the repo and restoring one file onto the base commit.
+- **Evidence is size-capped per section, so check sizes before a paid run.** Diffs truncate at ~60k chars (the manifest records it and `--gate` will refuse an approval on it). Review them in slices: `--diff-ref` takes no pathspec, so slice by committing per-area changes or by cloning the repo and restoring one file onto the base commit. A `--plan` is capped at 30,000 chars and each `--files` entry at 24,000 including the line numbers devpair adds (90,000 in total). Overflow is cut from the MIDDLE and the run carries on: the packet gets a truncation marker, the reviewer is told what is missing, `--json` reports `coverage: partial` with `coverage_gaps`, and stderr says `EVIDENCE PARTIAL`. Nothing fails without `--gate`, so a caller that ignores both gets a review of a document with a hole in it. For a long plan or brief, split it at section boundaries into consecutive parts of at most ~18k chars, pass them all with `--files`, and make `--plan` a one-line pointer ("one document in N consecutive files; read them in order"). Confirm with `--dry-run` (free) that every part goes in full, then check that `coverage` is `complete` in the result. Large packets are slow too: ~55k chars took 4–6 minutes per frontier reviewer, close to the 420 s default, so pass `--timeout 900`.
 - **A short verdict-less reply is a failed attempt**, not a review (a model expecting tools often answers "I'll check X first…"); devpair falls through to the next backend. Long verdict-less reviews are kept and fail the gate closed.
 - **Treating it as an oracle.** It has no access to your terminal, tests, or
   runtime — it reasons from what you pasted. Verify its claims before acting on
@@ -415,16 +468,19 @@ with a stubbed backend). No network required. Run after any change; set
 ## Files
 
 - `devpair.py` — implementation
-- `test_devpair.py` — 99 regression tests (559 checks)
+- `test_devpair.py` — 102 regression tests (580 checks)
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.
 
-State at runtime lives under `<hermes-home>/devpair/`: `sessions/*.json` (full
+State at runtime lives under `<hermes-home>/devpair/` (or wherever
+`DEVPAIR_HOME` points — use that for isolated test runs; a `HERMES_HOME` naming a
+missing directory is skipped with a stderr warning, never silently): `sessions/*.json` (full
 pairing transcripts, redacted, owner-only where supported), `current_session`
 (per-project pointer map; a legacy single-name pointer is still honoured for its
-own project), `invocations.jsonl` (append-only ledger: `attempt` reservations and
-`outcome` records — read it with `devpair audit`), and optional `config.json` —
+own project), `invocations.jsonl` (append-only ledger: `attempt` reservations —
+with the session name and run id — and `outcome` records; read it with
+`devpair audit`), and optional `config.json` —
 `order` to reorder reviewer preference, `reviewers` to declare your own roster,
 `daily_cap` for a hard ceiling on paid attempts per day, `require_attestation`
 to make `--requested-by` mandatory, `reviewer_toolset` (default

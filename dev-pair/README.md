@@ -83,7 +83,7 @@ devpair doctor --live --requested-by user   # paid: probe each backend
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 559 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 580 checks, no network
 ```
 
 ### Configuration
@@ -106,7 +106,9 @@ python3 <hermes-home>/devpair/test_devpair.py    # 559 checks, no network
 
 ### Where state lives
 
-devpair finds your Hermes home in this order: `HERMES_HOME` → `%LOCALAPPDATA%\hermes` (Windows) → `~/.hermes` → any dotted directory that looks like a Hermes home. Sessions live at `<hermes-home>/devpair/sessions/`, and the invocation ledger at `<hermes-home>/devpair/invocations.jsonl`.
+devpair finds your Hermes home in this order: `HERMES_HOME` → `%LOCALAPPDATA%\hermes` (Windows) → `~/.hermes` → any dotted directory that looks like a Hermes home. Sessions live at `<hermes-home>/devpair/sessions/`, and the invocation ledger at `<hermes-home>/devpair/invocations.jsonl`. A `HERMES_HOME` that names a missing directory is skipped with a one-line warning on stderr, so a stale setting never silently splits your ledger (and your daily cap) across two homes.
+
+Set `DEVPAIR_HOME` to put dev-pair's own state (config, ledger, sessions) somewhere else without changing which Hermes home the reviewer runs under. It is the clean way to test against a throwaway ledger and cap, or to keep a separate one deliberately.
 
 ## Using it
 
@@ -179,17 +181,22 @@ much you can trust them:
 | Mechanism | What it does | Evadable by an agent? |
 |---|---|---|
 | `daily_cap` | Hard ceiling on paid ATTEMPTS per day (fallbacks and live doctor probes count); an invalid config refuses every paid run | **No** |
-| Invocation ledger | Every attempt reserved before the call (when, mode, reviewer, who asked) plus an outcome record (status, reported route) | No (records only) |
+| Invocation ledger | Every attempt reserved before the call (when, mode, reviewer, who asked, session, run id) plus an outcome record (status, reported route) | No (records only) |
 | `--requested-by WHO` | Names who asked for this run | Yes — it is an attestation |
 
 ```bash
-devpair audit              # last 7 days: when, mode, who asked, reviewer, context size
+devpair audit              # last 7 days: when, mode, who asked, reviewer, context size, session
 devpair audit --days 1     # just today
 devpair audit --json       # machine-readable, includes runs_today and daily_cap
 ```
 
 `audit` explicitly flags runs that named nobody as the requester — that is where
 an agent running the pair unasked would show up. It costs nothing to run.
+
+Every result carries its `run_id` (in `--json`, in the human footer, and in the
+`FAILED` line when no backend answered), and the ledger records the same id plus
+the session name. A script that launched several reviews can match each result
+to its exact ledger records instead of guessing by time.
 
 Set a ceiling in `<hermes-home>/devpair/config.json`:
 
@@ -362,7 +369,7 @@ devpair reset     # fresh session (do this per feature — stale context pollute
 | `--timeout N` | Per-backend timeout, default 420s (use 900 for small local models) |
 | `--budget N` | Total wall-clock across ALL backends; stops a dead chain burning `timeout × candidates` |
 | `--gate` | Exit non-zero on a bad verdict — see below |
-| `--json` | Machine-readable output (verdict, blockers, tokens, unverified claims) |
+| `--json` | Machine-readable output (verdict, blockers, tokens, unverified claims, coverage, session, `run_id`) |
 | `--dry-run` | Show who would review and why; no call, no state written |
 
 ### Gating (opt-in)
@@ -386,6 +393,9 @@ was actually sent — truncated sections, omitted files and why, failed `git` ca
 and a sha256 of the packet — and the reviewer is told about the gaps. A reviewer
 saying "I saw everything" cannot override it. `--allow-partial` accepts a partial
 approval deliberately and labels it PARTIAL (stderr and `--json` `coverage`).
+Without `--gate`, a partial packet is still advisory, but it is announced on
+stderr as `EVIDENCE PARTIAL` (even with `--json`), the same way a route mismatch
+is, so a script reading only the JSON verdict cannot miss it.
 `--strict-citations` also fails the gate on a `file:line` outside the packet.
 
 The verdict rules are deliberate too: a gate that cannot read the answer — or cannot
@@ -450,14 +460,14 @@ the current git top-level, so another project never replays it.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 99 regression tests (559 checks), no network required
+python3.11 test_devpair.py     # 102 regression tests (580 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, truncation maths, the zero-tool launch and file transport, route receipts, process-tree timeouts, tri-state enforcement and per-attempt reservations, session containment/locking/redaction, and the coverage-aware gate. Run it after any change, with `DEVPAIR_HERMES_CMD` pointed at a stub so nothing can reach a real backend.
 
 ## Version & history
 
-Current: **1.2.2**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.2.3**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

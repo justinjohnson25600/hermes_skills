@@ -9,6 +9,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -578,6 +579,154 @@ def test_json_output_carries_route_receipts(base):
                        stdin=subprocess.DEVNULL, timeout=120)
     check("a reported route mismatch is shouted on stderr even in --json mode",
           "ROUTE MISMATCH" in r.stderr and "openrouter/cheap-x" in r.stderr, r.stderr[-300:])
+
+
+def _ledger_records(state_dir: Path) -> list:
+    p = Path(state_dir) / "invocations.jsonl"
+    if not p.is_file():
+        return []
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+@isolated
+def test_run_identity_reaches_callers(base):
+    print("\n[identity] a caller can match a result to its ledger records exactly")
+    stub, _ = _argv_stub(base, reply="## VERDICT\nPROCEED\nfine",
+                         usage={"provider": "kimi-coding", "model": "kimi-k3", "completed": True,
+                                "api_calls": 1})
+    ev = base / "ev.txt"
+    ev.write_text("x = 1\n", encoding="utf-8")
+    env = dict(os.environ, DEVPAIR_HERMES_CMD=stub, DEVPAIR_DRIVER_MODEL="claude-opus-5",
+               DEVPAIR_DRIVER_PROVIDER="anthropic", HERMES_HOME=str(base))
+    env.pop("DEVPAIR_HOME", None)
+    script = str(Path(devpair.__file__))
+
+    def run(*argv):
+        return subprocess.run([sys.executable, script, *argv], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", env=env, cwd=str(base),
+                              stdin=subprocess.DEVNULL, timeout=120)
+
+    r = run("critique", "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--json",
+            "--session", "ident")
+    try:
+        data = json.loads(r.stdout)
+    except Exception:
+        data = {}
+    rid = data.get("run_id")
+    check("--json carries the run id", bool(rid), (r.stdout or r.stderr)[-300:])
+    recs = _ledger_records(base / "devpair")
+    att = [x for x in recs if x.get("kind") == "attempt" and x.get("run_id") == rid]
+    out = [x for x in recs if x.get("kind") == "outcome" and x.get("run_id") == rid]
+    check("…which finds exactly one attempt in the ledger", len(att) == 1, recs)
+    check("…and its outcome", len(out) == 1 and out[0].get("status") == "ok", out)
+    check("the ledger attempt names its session", (att or [{}])[0].get("session") == "ident", att)
+    sp = base / "devpair" / "sessions" / "ident.json"
+    sess = json.loads(sp.read_text(encoding="utf-8")) if sp.is_file() else {}
+    check("the saved turn carries the run id too",
+          bool(rid) and (sess.get("turns") or [{}])[-1].get("run_id") == rid,
+          (sess.get("turns") or [{}])[-1])
+
+    a = run("audit", "--json")
+    try:
+        aud = json.loads(a.stdout)
+    except Exception:
+        aud = {}
+    check("audit --json exposes the session",
+          any(x.get("session") == "ident" and x.get("run_id") == rid for x in aud.get("runs", [])),
+          a.stdout[-300:])
+    h = run("audit")
+    check("human audit shows the session column", "session" in h.stdout and "ident" in h.stdout,
+          h.stdout[-300:])
+
+    env["DEVPAIR_HERMES_CMD"] = NO_NETWORK_STUB
+    f = run("critique", "--with", "kimi-coding/kimi-k3", "--files", str(ev), "--json",
+            "--session", "ident-fail")
+    m = re.search(r"FAILED — no reviewer backend answered \(run ([^)]+)\)", f.stderr)
+    check("a failed run exits 1 and names its run id", f.returncode == 1 and bool(m),
+          f.stderr[-300:])
+    failed = [x for x in _ledger_records(base / "devpair")
+              if m and x.get("run_id") == m.group(1)]
+    check("…which finds the failed attempt and its outcome in the ledger",
+          any(x.get("kind") == "attempt" and x.get("session") == "ident-fail" for x in failed)
+          and any(x.get("kind") == "outcome" and x.get("status") != "ok" for x in failed), failed)
+
+
+def test_devpair_home_isolates_state():
+    print("\n[portable] DEVPAIR_HOME isolates dev-pair's state; a missing HERMES_HOME is reported")
+    with _temp_dir() as td:
+        td = Path(td)
+        state = td / "isolated-state"
+        hh = td / "hermes-home"
+        (hh / "skills").mkdir(parents=True)
+        stub, _ = _argv_stub(td, reply="## VERDICT\nPROCEED\nfine",
+                             usage={"provider": "kimi-coding", "model": "kimi-k3",
+                                    "completed": True, "api_calls": 1})
+        ev = td / "ev.txt"
+        ev.write_text("x = 1\n", encoding="utf-8")
+        env = dict(os.environ, DEVPAIR_HERMES_CMD=stub, DEVPAIR_DRIVER_MODEL="claude-opus-5",
+                   DEVPAIR_DRIVER_PROVIDER="anthropic", HERMES_HOME=str(hh),
+                   DEVPAIR_HOME=str(state))
+        script = str(Path(devpair.__file__))
+        r = subprocess.run([sys.executable, script, "critique", "--with", "kimi-coding/kimi-k3",
+                            "--files", str(ev), "--json", "--session", "iso"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=str(td),
+                           stdin=subprocess.DEVNULL, timeout=120)
+        check("a run under DEVPAIR_HOME succeeds", r.returncode == 0, r.stderr[-300:])
+        check("…its ledger lands in DEVPAIR_HOME", bool(_ledger_records(state)))
+        check("…and its session too", (state / "sessions" / "iso.json").is_file())
+        check("…and nothing is written under the Hermes home",
+              not (hh / "devpair").exists(), sorted(p.name for p in hh.iterdir()))
+
+        env2 = dict(env, HERMES_HOME=str(td / "missing-home"))
+        env2.pop("DEVPAIR_HOME", None)
+        w = subprocess.run([sys.executable, script, "--help"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env2, cwd=str(td), stdin=subprocess.DEVNULL,
+                           timeout=60)
+        werr = w.stderr or ""
+        check("a HERMES_HOME that is not a directory is reported, not silent",
+              "HERMES_HOME=" in werr and "not a directory" in werr, werr[-300:])
+        check("…once per process, not once per lookup", werr.count("not a directory") == 1,
+              werr[-300:])
+        # Regression (found on Windows): printed at import, before main() forced
+        # UTF-8, the warning left in the console code page (cp1252 encodes the
+        # em dash as 0x97) and a caller decoding stderr as UTF-8 crashed.
+        check("…and it arrives as UTF-8 (the em dash survives decoding)", "\u2014" in werr,
+              ascii(werr[-200:]))
+        env3 = dict(env2, HERMES_HOME=str(hh))
+        q = subprocess.run([sys.executable, script, "--help"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env3, cwd=str(td), stdin=subprocess.DEVNULL,
+                           timeout=60)
+        check("a valid HERMES_HOME stays quiet", "not a directory" not in (q.stderr or ""),
+              (q.stderr or "")[-300:])
+
+
+@isolated
+def test_partial_evidence_is_shouted_in_json_mode(base):
+    print("\n[gate] without --gate, PARTIAL evidence is still shouted on stderr in --json mode")
+    stub, _ = _argv_stub(base, reply="## VERDICT\nPROCEED\nfine", name="stub_part")
+    big = base / "big.py"
+    big.write_text("".join(f"x_{i} = {i}\n" for i in range(6000)), encoding="utf-8")
+    small = base / "small.py"
+    small.write_text("x = 1\n", encoding="utf-8")
+    env = dict(os.environ, DEVPAIR_HERMES_CMD=stub, DEVPAIR_DRIVER_MODEL="claude-opus-5",
+               DEVPAIR_DRIVER_PROVIDER="anthropic", HERMES_HOME=str(base))
+    env.pop("DEVPAIR_HOME", None)
+
+    def run(f):
+        return subprocess.run([sys.executable, str(Path(devpair.__file__)), "review", "--with",
+                               "kimi-coding/kimi-k3", "--ask", "check", "--files", str(f), "--json"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                              cwd=str(base), stdin=subprocess.DEVNULL, timeout=120)
+
+    r = run(big)
+    d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    check("partial evidence: exit 0 (advisory without --gate)", r.returncode == 0, r.stderr[-300:])
+    check("…JSON says partial", d.get("coverage") == "partial", d.get("coverage"))
+    check("…and stderr says so too", "EVIDENCE PARTIAL" in r.stderr and "truncated" in r.stderr,
+          r.stderr[-300:])
+    r = run(small)
+    check("complete evidence stays quiet on stderr", "EVIDENCE PARTIAL" not in r.stderr,
+          r.stderr[-300:])
 
 
 # --- driver identity (fix: same-family guard must use the LIVE model) -------
@@ -2851,6 +3000,9 @@ def main():
         test_receipt_reports_identity_never_assumes_it,
         test_timeout_kills_the_reviewer_tree,
         test_json_output_carries_route_receipts,
+        test_run_identity_reaches_callers,
+        test_devpair_home_isolates_state,
+        test_partial_evidence_is_shouted_in_json_mode,
         test_driver_flag_overrides_config_and_env,
         test_same_family_guard_uses_explicit_driver,
         test_followup_empty_session_warns,

@@ -12,6 +12,13 @@ Do not call the real reviewer or `doctor --live` merely to compare features
 - Put fixture state, temporary files, config and ledgers under the active
   profile's scratch directory. Redirect `HERMES_HOME`, `TMP`, `TEMP`, `TMPDIR`
   and Python's tempfile directory before importing/running fixtures.
+  Isolate dev-pair's own state with `DEVPAIR_HOME` (1.2.3 and later): it moves
+  the config, ledger and sessions without touching the Hermes home. If you
+  redirect `HERMES_HOME` instead, create it first: devpair honours it only when
+  it names an existing directory and otherwise falls back to the real home (with
+  a stderr warning since 1.2.3; silently before), so fixture runs land in the
+  real ledger and count against the real `daily_cap`. After the first stub run,
+  confirm the fixture ledger exists where you expect it.
 - Stub backend execution with a harmless local subprocess or an injected test
   backend. Keep the production source, roster and model configuration untouched.
 - Ensure PATH-resolution tests see no `DEVPAIR_HERMES_CMD` override: a global

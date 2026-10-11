@@ -50,11 +50,47 @@ def _resolve_hermes_home() -> Path:
 
     Order: HERMES_HOME env > a dotted/known dir that actually looks like a
     Hermes home > ~/.hermes as a last resort.
+
+    A HERMES_HOME that names a missing directory is skipped, but said out loud:
+    falling back quietly would split the ledger (and with it the daily cap)
+    across two homes the moment that directory appears.
     """
     env = os.environ.get("HERMES_HOME")
     if env and Path(env).is_dir():
         return Path(env)
+    found = _fallback_hermes_home()
+    if env:
+        _warn_once("hermes-home",
+                   f"[devpair] WARNING: HERMES_HOME={env} is not a directory — using {found} "
+                   "instead. Create it or unset it; set DEVPAIR_HOME to choose where dev-pair "
+                   "keeps its state.")
+    return found
 
+
+_WARNED: set = set()
+_PENDING_WARNINGS: list = []
+_OUTPUT_READY = False
+
+
+def _warn_once(key: str, msg: str) -> None:
+    """A misconfiguration is worth one stderr line per process, not one per lookup.
+
+    Warnings raised while the module is still importing (state-dir resolution
+    runs at import) are held until main() has switched the streams to UTF-8:
+    printed earlier, a Windows console code page would encode them (cp1252
+    turns an em dash into byte 0x97), and a caller reading stderr as UTF-8 would
+    crash on the very warning meant to help it."""
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    if _OUTPUT_READY:
+        print(msg, file=sys.stderr)
+    else:
+        _PENDING_WARNINGS.append(msg)
+
+
+def _fallback_hermes_home() -> Path:
+    """Hermes home candidates when HERMES_HOME does not name a directory."""
     candidates: list[Path] = []
     local = os.environ.get("LOCALAPPDATA")
     if local:
@@ -75,7 +111,20 @@ def _resolve_hermes_home() -> Path:
     return HOME / ".hermes"
 
 
-BASE = _resolve_hermes_home() / "devpair"
+def _resolve_state_dir() -> Path:
+    """Where dev-pair keeps ITS state: config.json, the ledger, sessions.
+
+    DEVPAIR_HOME names that directory directly, for isolated test runs or a
+    deliberately separate ledger and cap, without changing which Hermes home
+    the reviewer backend runs under. Otherwise it is <hermes-home>/devpair.
+    """
+    override = os.environ.get("DEVPAIR_HOME", "").strip()
+    if override:
+        return Path(override).expanduser().absolute()
+    return _resolve_hermes_home() / "devpair"
+
+
+BASE = _resolve_state_dir()
 SESSIONS = BASE / "sessions"
 CONFIG = BASE / "config.json"
 CURRENT = BASE / "current_session"
@@ -409,7 +458,7 @@ def _new_run_id() -> str:
 
 
 def _reserve_attempt_locked(args, reviewer: dict, driver: dict, context_chars: int, *,
-                    run_id: str, attempt: int) -> tuple[bool, str]:
+                    run_id: str, attempt: int, session: str | None = None) -> tuple[bool, str]:
     """Reserve ONE paid backend attempt: check quota and append the ledger
     record under one lock, before the call. Returns (ok, refusal_message).
 
@@ -475,9 +524,13 @@ def _reserve_attempt_locked(args, reviewer: dict, driver: dict, context_chars: i
                     f"  Raise or clear it with \"daily_cap\" in {CONFIG}, or wait for tomorrow.\n"
                     "  See what spent it: devpair audit --days 1")
 
+        extra = {"kind": "attempt", "run_id": run_id, "attempt": attempt}
+        if session:
+            # The session the attempt was reserved under, so a caller (or a
+            # human reading `devpair audit`) can find its own runs by name.
+            extra["session"] = session
         wrote = log_invocation(getattr(args, "mode", "?"), reviewer, driver,
-                               requested_by or "unattributed", context_chars,
-                               extra={"kind": "attempt", "run_id": run_id, "attempt": attempt})
+                               requested_by or "unattributed", context_chars, extra=extra)
 
     if enforcing and not wrote:
         # The run would proceed unrecorded, which makes the cap uncountable and
@@ -504,12 +557,13 @@ def reserve_attempt(args, reviewer: dict, driver: dict, context_chars: int, **kw
 
 
 def authorize(args, reviewer: dict, driver: dict, context_chars: int,
-              *, run_id: str | None = None) -> str:
+              *, run_id: str | None = None, session: str | None = None) -> str:
     """Gate a paid run by reserving its FIRST attempt. Exits non-zero rather
     than spending tokens. Returns the run id that later attempts and outcome
     records share."""
     run_id = run_id or _new_run_id()
-    ok, why = reserve_attempt(args, reviewer, driver, context_chars, run_id=run_id, attempt=1)
+    ok, why = reserve_attempt(args, reviewer, driver, context_chars, run_id=run_id, attempt=1,
+                              session=session)
     if not ok:
         sys.exit(why)
     return run_id
@@ -2374,7 +2428,7 @@ def cmd_pair(args) -> int:
     # stay free) and BEFORE the first backend call, so nothing is spent without
     # a ledger entry and nothing exceeds the cap.
     authorize_ctx = len(context)
-    run_id = authorize(args, reviewer, driver, authorize_ctx)
+    run_id = authorize(args, reviewer, driver, authorize_ctx, session=spath.stem)
 
     t0 = time.time()
     ok, response, used = False, "", reviewer
@@ -2391,7 +2445,7 @@ def cmd_pair(args) -> int:
         if i > 0:
             # Every fallback is its own paid attempt: reserved and counted.
             reserved, why = reserve_attempt(args, cand, driver, authorize_ctx,
-                                            run_id=run_id, attempt=i + 1)
+                                            run_id=run_id, attempt=i + 1, session=spath.stem)
             if not reserved:
                 print(f"[devpair] fallback to {cand['label']} not attempted — "
                       f"{why.splitlines()[0]}", file=sys.stderr)
@@ -2415,7 +2469,7 @@ def cmd_pair(args) -> int:
         print(f"[devpair] {cand['label']} unavailable: {response[:160]}", file=sys.stderr)
 
     if not ok:
-        print("\n[devpair] FAILED — no reviewer backend answered.", file=sys.stderr)
+        print(f"\n[devpair] FAILED — no reviewer backend answered (run {run_id}).", file=sys.stderr)
         print(f"[devpair] last error: {response[:600]}", file=sys.stderr)
         print("[devpair] run `devpair doctor` to check backends.", file=sys.stderr)
         return 1
@@ -2467,6 +2521,7 @@ def cmd_pair(args) -> int:
         "focus": redact_secrets(args.focus or "")[0],
         "reviewer": f"{used['provider']}/{used['model']}",
         "driver": f"{driver['provider']}/{driver['model']}",
+        "run_id": run_id,
         "context_chars": len(context),
         "elapsed_s": round(elapsed, 1),
         "tokens_in_est": tokens_in,
@@ -2493,6 +2548,12 @@ def cmd_pair(args) -> int:
         print(f"[devpair] ROUTE MISMATCH: requested {rt0.get('requested_provider')}/"
               f"{rt0.get('requested_model')}, backend reported {rt0.get('reported_provider')}/"
               f"{rt0.get('reported_model')}", file=sys.stderr)
+    if coverage == "partial" and not args.gate:
+        # Same rule as a route mismatch: a --json consumer must not be able to
+        # miss that the reviewer saw only part of the evidence. (--gate already
+        # reports it in its own verdict line.)
+        print(f"[devpair] EVIDENCE PARTIAL: {'; '.join(coverage_gaps[:3]) or 'see coverage_gaps'}"
+              " — this review covers only what was sent.", file=sys.stderr)
 
     if args.json:
         print(json.dumps({
@@ -2501,6 +2562,7 @@ def cmd_pair(args) -> int:
             "reviewer_label": used["label"],
             "driver": f"{driver['provider']}/{driver['model']}",
             "session": spath.stem,
+            "run_id": run_id,
             "turn": len(sess["turns"]),
             "elapsed_s": round(elapsed, 1),
             "tokens_in_est": tokens_in,
@@ -2525,7 +2587,7 @@ def cmd_pair(args) -> int:
         print(f"\n{bar}")
         print(f"  DEV PAIR · {mode.upper()} · reviewed by {used['label']}")
         print(f"  driver: {driver['model']}   session: {spath.stem} (turn {len(sess['turns'])})   {elapsed:.0f}s")
-        print(f"  ~{tokens_in:,} tokens in / ~{tokens_out:,} out")
+        print(f"  ~{tokens_in:,} tokens in / ~{tokens_out:,} out   run: {run_id}")
         rt = attempts[-1] if attempts else {}
         if rt.get("identity") == "reported-match":
             print(f"  route: backend reported {rt.get('reported_provider')}/{rt.get('reported_model')} "
@@ -2708,8 +2770,9 @@ def cmd_audit(args) -> int:
                           "runs": recs}, indent=2))
         return 0
 
-    print(f"{'when':<22} {'mode':<9} {'requested by':<14} {'reviewer':<30} {'outcome':<14} ctx")
-    print("─" * 100)
+    print(f"{'when':<22} {'mode':<9} {'requested by':<14} {'reviewer':<30} {'outcome':<14} "
+          f"{'ctx':>9}  session")
+    print("─" * 118)
     for r in recs:
         o = outcomes.get((r.get("run_id"), r.get("attempt"))) or {}
         oc = o.get("status") or ("—" if r.get("kind") == "attempt" else "(legacy)")
@@ -2717,12 +2780,12 @@ def cmd_audit(args) -> int:
             oc += " MISMATCH"
         print(f"{r.get('at','?')[:19]:<22} {r.get('mode','?'):<9} "
               f"{r.get('requested_by','?')[:13]:<14} {r.get('reviewer','?')[:29]:<30} "
-              f"{oc[:13]:<14} {r.get('context_chars',0):,}")
+              f"{oc[:13]:<14} {r.get('context_chars',0):>9,}  {r.get('session') or '—'}")
 
     unattributed = [r for r in recs if r.get("requested_by") in ("", "unattributed", None)]
     cap = daily_cap()
     state, _c, problem = _cfg_state()
-    print("─" * 100)
+    print("─" * 118)
     print(f"{len(recs)} paid attempt(s)"
           + (f" in the last {args.days}d" if args.days else "")
           + f"; {runs_today()} today"
@@ -2823,6 +2886,10 @@ def _force_utf8_output() -> None:
             # Python < 3.7, or a stream that is not a TextIOWrapper (pytest
             # capture, a pipe wrapper). Never fatal: this is cosmetic.
             pass
+    global _OUTPUT_READY
+    _OUTPUT_READY = True
+    while _PENDING_WARNINGS:
+        print(_PENDING_WARNINGS.pop(0), file=sys.stderr)
 
 
 def main() -> int:

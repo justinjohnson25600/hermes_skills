@@ -2,6 +2,62 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.3 — 2026-10-11
+
+Run identity for callers, isolated state, and two warnings that used to be
+silent. New JSON and ledger fields are additive; the audit table gains a
+trailing column. Nothing existing changes meaning.
+
+- **Every result names its run.** `--json` output, the saved session turn, the
+  human footer and the `FAILED` line (when no backend answered) now carry the
+  `run_id`, and each ledger attempt records the session it was reserved under.
+  `devpair audit` shows a session column and `audit --json` includes the field.
+  Before this, a script that launched several reviews had to match results to
+  ledger records by working directory and time window, which is guesswork once
+  two runs overlap: the ledger had no session name and the JSON had no run id.
+  Found while building a skill that orchestrates several co-developer reviews.
+- **`DEVPAIR_HOME` isolates dev-pair's state** (config, ledger, sessions)
+  without changing which Hermes home the reviewer runs under, so a test harness
+  can use a throwaway ledger and `daily_cap` instead of the real ones.
+- **A `HERMES_HOME` that names a missing directory is reported**, once per
+  process on stderr. It was already skipped in favour of the next candidate, but
+  silently, and a fallback that flips back once the directory appears splits the
+  ledger (and with it the daily cap) across two homes.
+- **Partial evidence is announced on stderr even without `--gate`**, as
+  `EVIDENCE PARTIAL`, the same way a route mismatch is. A `--json` consumer
+  previously saw it only if it read the `coverage` field.
+- **Docs:** the evidence caps (`--plan` file 30,000 characters, each `--files`
+  entry 24,000, the whole packet 90,000, cut from the middle) are now a SKILL.md
+  pitfall, with the split-into-`--files` workaround; so is matching by `run_id`.
+  SKILL.md also gains a **"More than one reviewer (a panel)"** section, learned
+  running a two-reviewer panel through two rounds: name each reviewer and give it
+  its own `--session` (the implicit project session would feed reviewer two the
+  first critique), launch them in parallel, write your own findings before
+  opening theirs, run round two as a `followup` on each reviewer's own session,
+  probe every claim about real tools after triage, and mark anything added after
+  the last review as unreviewed. The rate-limit pitfall now says to spend the
+  paid review only once a cheap probe answers. `references/offline-assessment.md`
+  points fixtures at `DEVPAIR_HOME`.
+
+Considered and deliberately left alone: dev-pair resolves the Hermes home twice,
+once for its own state and once (`_hermes_home`) to find the reviewer's
+`state.db` for route receipts. They look like duplicates but are not. The second
+mirrors how the `hermes` subprocess resolves its own home (`HERMES_HOME` as
+given), so merging them would point receipt lookups at the wrong `state.db` in
+exactly the misconfiguration this release now warns about.
+
+Tests: 3 new regression tests, 21 checks. Red→green: 16 of the 21 fail against
+1.2.2, and the other 5 are controls that must pass either way. macOS: 580
+passed, 0 failed (559 before). Windows: 584 passed, 0 failed (563 before).
+
+Caught on Windows before release: the first cut printed the `HERMES_HOME`
+warning at import time, before `main()` switches the streams to UTF-8, so the
+console code page encoded it (cp1252 turns the em dash into byte 0x97) and a
+caller decoding stderr as UTF-8 crashed. That aborted the Windows suite with no
+summary line while macOS was green. Import-time warnings are now queued and
+printed once output is UTF-8, and a regression check asserts the warning decodes
+intact.
+
 ## 1.2.2 — 2026-10-07
 
 Test-harness reliability fix. No change to shipped behaviour; `devpair.py` is
