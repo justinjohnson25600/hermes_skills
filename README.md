@@ -132,6 +132,13 @@ installs the code, writes a platform-correct CLI shim, seeds any config from
 this machine's own providers, and runs the skill's test suite as an install
 gate. Re-running upgrades in place.
 
+The CLI shim (`~/.local/bin/<command>`, Windows `%LOCALAPPDATA%\hermes\bin\<command>.cmd`)
+is shared by every Hermes home on the account, so it belongs to the default home.
+Installing into another home (`HERMES_HOME=~/.hermes/profiles/work python3 install.py dev-pair`)
+keeps a working shim as it is and says so, repairs a shim whose target has gone, and the
+shim itself falls back to the default home's copy if its target is later deleted.
+`python3 test_install.py` checks this on the current platform.
+
 > Piping a remote script into an interpreter means trusting the source.
 > `install.py` is short and stdlib-only on purpose — read it first if that matters.
 

@@ -47,9 +47,13 @@ def log(msg: str) -> None:
 
 
 # --------------------------------------------------------------------------
-def resolve_hermes_home() -> Path:
-    """Same resolution order the installed tools use — keep these in step."""
-    env = os.environ.get("HERMES_HOME")
+def resolve_hermes_home(use_env: bool = True) -> Path:
+    """Same resolution order the installed tools use — keep these in step.
+
+    use_env=False gives the DEFAULT home (what a plain install with no
+    HERMES_HOME would use); the shared CLI shim belongs to that home.
+    """
+    env = os.environ.get("HERMES_HOME") if use_env else None
     if env and Path(env).is_dir():
         return Path(env)
 
@@ -114,21 +118,62 @@ def list_skills() -> list[str]:
 
 
 # --------------------------------------------------------------------------
-def write_shim(name: str, target: Path, py: str, dry: bool) -> Path:
-    """Create a CLI entry point that survives interpreter breakage."""
+def _shim_target(dest: Path) -> str | None:
+    """The TARGET an existing shim points at, or None when unreadable."""
+    try:
+        text = dest.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        s = line.strip()
+        for prefix in ('set "TARGET=', 'TARGET="'):
+            if s.startswith(prefix):
+                return s[len(prefix):].rstrip('"')
+    return None
+
+
+def write_shim(name: str, target: Path, py: str, dry: bool, home: Path | None = None) -> Path:
+    """Create a CLI entry point that survives interpreter breakage.
+
+    The shim is shared by every Hermes home on this account, so an install into
+    a non-default home (a profile, a test's temporary home) must not repoint a
+    working shim at itself: when that home is deleted, the CLI dies. Such an
+    install keeps a working shim, repairs a dead one, and the shim itself falls
+    back to the default home's copy whenever its own target has gone.
+    """
     dest_dir = bin_dir()
     dest = dest_dir / (f"{name}.cmd" if IS_WIN else name)
+    home = home or resolve_hermes_home()
+    default_home = resolve_hermes_home(use_env=False)
+    try:
+        foreign = home.resolve() != default_home.resolve()
+    except OSError:
+        foreign = str(home) != str(default_home)
+    fallback = None
+    try:
+        fallback = default_home / target.relative_to(home)
+    except ValueError:
+        pass
+    if fallback is not None and str(fallback) == str(target):
+        fallback = None
+    if foreign and dest.exists():
+        current = _shim_target(dest)
+        if current and Path(current).is_file() and current != str(target):
+            log(f"kept the existing {name} launcher ({dest} -> {current}): this install went to "
+                f"{home}, not the default Hermes home {default_home}. Run {target} directly, or "
+                "reinstall without HERMES_HOME to repoint the launcher.")
+            return dest
     if IS_WIN:
         # A Hermes update can replace the environment that `py` lives in, which
         # left every devpair.cmd pointing at a deleted python.exe. Fall back the
         # way the POSIX shim does: the git-install venv, then whichever managed
         # environment this home has now, then the py launcher.
-        home = resolve_hermes_home()
         body = "\r\n".join([
             "@echo off",
             f"rem {name} - installed by hermes_skills/install.py",
             "setlocal EnableExtensions",
             f'set "TARGET={target}"',
+        ] + ([f'if not exist "%TARGET%" set "TARGET={fallback}"'] if fallback else []) + [
             f'set "PY={py}"',
             'if exist "%PY%" goto run',
             f'set "PY={home}\\hermes-agent\\venv\\Scripts\\python.exe"',
@@ -153,7 +198,8 @@ def write_shim(name: str, target: Path, py: str, dry: bool) -> Path:
             f"# {name} — installed by hermes_skills/install.py\n"
             "set -u\n"
             f'TARGET="{target}"\n'
-            f'for py in "{py}" python3.11 python3; do\n'
+            + (f'[ -f "$TARGET" ] || TARGET="{fallback}"\n' if fallback else "")
+            + f'for py in "{py}" python3.11 python3; do\n'
             '  if command -v "$py" >/dev/null 2>&1 && "$py" -c "import encodings" 2>/dev/null; then\n'
             '    exec "$py" "$TARGET" "$@"\n'
             "  fi\n"
@@ -398,7 +444,7 @@ def install(skill: str, dry: bool, run_verify: bool) -> int:
 
     entry = manifest.get("entrypoint")
     if entry:
-        write_shim(manifest.get("command", skill), state_dir / entry, py, dry)
+        write_shim(manifest.get("command", skill), state_dir / entry, py, dry, home=home)
 
     if manifest.get("needs_reviewer_config"):
         build_reviewer_config(home, state_dir, dry)

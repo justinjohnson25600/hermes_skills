@@ -191,7 +191,10 @@ def check_versions(skill: str, fix: bool) -> str | None:
 def check_test_counts(skill: str, fix: bool) -> None:
     """Docs claim 'N regression tests (M checks)'. Run the suite and compare."""
     d = ROOT / skill
-    verify = json.loads((d / "skill.json").read_text(encoding="utf-8")).get("verify")
+    sj = json.loads((d / "skill.json").read_text(encoding="utf-8"))
+    # verify runs from the state dir; verify_skill ships beside SKILL.md. Either one
+    # backs the docs' "N regression tests (M checks)" claim.
+    verify = sj.get("verify") or sj.get("verify_skill")
     if not verify or not (d / verify).is_file():
         return
     out = sh(sys.executable, str(d / verify), cwd=d)
@@ -333,6 +336,20 @@ def check_index() -> None:
         fail(f"skills.json is stale: lists {sorted(listed)}, repo has {sorted(actual)}")
 
 
+def check_installer() -> None:
+    """install.py's own regression tests (the shared CLI launcher)."""
+    t = ROOT / "test_install.py"
+    if not t.is_file():
+        problems.append("test_install.py is missing")
+        return
+    r = subprocess.run([sys.executable, str(t)], capture_output=True, text=True, cwd=ROOT)
+    tail = (r.stdout.strip().splitlines() or ["(no output)"])[-1]
+    if r.returncode != 0:
+        problems.append(f"test_install.py failed: {tail}")
+    else:
+        print(f"  installer: {tail}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fix", action="store_true", help="repair what is safely repairable")
@@ -341,6 +358,7 @@ def main() -> int:
 
     check_remote(a.no_fetch)
     check_index()
+    check_installer()
     for s in skills():
         v = check_versions(s, a.fix)
         check_test_counts(s, a.fix)
