@@ -158,4 +158,4 @@ On Windows use `py` or Hermes' own interpreter. `--json` gives machine-readable 
 
 ## Version
 
-0.0.2 — see [CHANGELOG.md](CHANGELOG.md). Semver; +0.0.1 per published change.
+0.0.3 — see [CHANGELOG.md](CHANGELOG.md). Semver; +0.0.1 per published change.

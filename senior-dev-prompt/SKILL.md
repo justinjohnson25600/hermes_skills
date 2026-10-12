@@ -1,7 +1,7 @@
 ---
 name: senior-dev-prompt
 description: Use when a rough build idea needs a senior-dev prompt.
-version: 0.0.2
+version: 0.0.3
 author: Justin Johnson, Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -13,7 +13,7 @@ metadata:
 
 # Senior Dev Prompt
 
-Turns a rough build request ("make me an app that...") into a senior-developer brief: the
+Turns a rough build request into a senior-developer brief: the
 requirements, safeguards and acceptance criteria an expert would insist on, plus a workflow mandate
 sized to the work (superpowers or GSD skills when installed, inline phases otherwise). Other AI model
 families can review the brief through dev-pair before hand-off. It writes the brief and nothing
@@ -78,12 +78,11 @@ or rambling input stays quoted as given; list each non-obvious interpretation as
 (a path, "my repo", "my app", file names). Then read instruction files in full (README, AGENTS.md,
 CLAUDE.md, contributing notes), the manifest, the layout and whether `.planning/` exists, and source
 only where a constraint depends on it. Briefing is not diagnosis: change nothing in the project
-(running its tests is fine if the run writes nothing into it, e.g. with caches
-disabled). In a project root with no project named,
+(running its tests is fine if that writes nothing, e.g. caches off). In a project root with no
+project named,
 "fix" means this project (ASSUMED: there is nothing new to fix), "add / change" puts "this project
 or a new one?" into intake, and "build / make / create" stays greenfield (ASSUMED). Memory and
-notes are labelled preferences, not facts about the target: a machine or place named by
-nickname ("the X box") is confirmed in intake. Detect each workflow
+notes are labelled preferences, not facts about the target. Detect each workflow
 skill individually, dev-pair (`devpair doctor`, static only) and the driver model and provider.
 *Done when* the context record lists greenfield or existing, stack signals, installed workflow
 skills, the driver and K.
@@ -110,12 +109,14 @@ typical gaps. T0–T1: outcome, platforms, data and state, success criteria, sco
 INFERRED / MATERIAL-MISSING / MINOR-MISSING; rank material gaps (architecture > scope > cost and
 risk) and note whether each has a safe default.
 
-**Step 4 — Intake.** One `clarify` call (H2): the target, project or split question first when
-they arise, the co-developer count when K ≥ 1 (exact wording in `references/codev-review.md`), then
+**Step 4 — Intake.** One `clarify` call (H2). A machine or place named by nickname ("the X box")
+comes first: "Which machine do you mean by 'the X box'?" with this machine and each one
+memory names as choices, never presupposing one. Then the project or split question when they
+arise, the co-developer count when K ≥ 1 (exact wording in `references/codev-review.md`), then
 the top material gaps. No material gaps: skip intake. No `clarify` tool: ask the same numbered
 questions in one plain message and stop. Unanswered: safe default → ASSUMED and TO CONFIRM; none →
-BLOCKING. Unconfirmed, the target is this machine unless reading it shows otherwise; it stays TO
-CONFIRM, and work on another machine becomes the plan's first task.
+BLOCKING. Until the user picks, the target is this machine unless reading it shows otherwise, and
+TO CONFIRM even when memory and the nickname agree; work on another machine is the plan's first task.
 
 **Step 5 — Route** with `references/routing.md`, checking every skill of the chain. *Done when* the
 route has real values and its matrix cell is recorded.
@@ -146,17 +147,16 @@ numbered summary with the brief attached as a document). Then one form:
   missing workflow skills first, each with what it adds, its source and trust tier, and for plugins
   "runs code, may install Python packages, needs a restart". Per pick: inspect, then install
   non-interactively; a blocked or incomplete scan is reported and skipped. Afterwards re-detect,
-  reroute, bump the version ("installed X; route D → A") and revalidate. A skill installed now
-  loads only in a new session, and a plugin needs a restart, so Run now after an install starts a
-  fresh session from the brief.
+  reroute, bump the version ("installed X; route D → A") and revalidate. New skills load only in
+  new sessions and plugins need a restart, so Run now after an install starts a fresh session.
 
 Combined choices run in order: edits → installs → reroute → revalidate → reviews → revise → run.
 No answer to the form (timeout, unattended or one-shot run): save only; nothing runs, installs or
 spends. *Done when* the user's choice is carried out.
 
 ## Running the scripts
-Both live in this skill's folder (`skill_dir` when the skill loads). `execute_code` works even where
-no system Python exists:
+Both live in this skill's folder (`skill_dir`). `execute_code` works without a
+system Python:
 `subprocess.run([sys.executable, "<skill_dir>/scripts/lint_brief.py", "<brief path>"])`.
 Exit codes: 0 pass, 1 findings, 2 usage. `scout.py` never installs; a slow or failed search is one
 ERROR line, and its `MISSING` lines carry install candidates for missing workflow skills.

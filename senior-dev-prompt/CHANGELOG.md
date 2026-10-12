@@ -2,6 +2,27 @@
 
 All notable changes to senior-dev-prompt. Semver; every published change bumps the patch number.
 
+## 0.0.3 — 2026-10-12
+
+- A machine or place named by nickname ("the X box") gets the first question, in fixed words:
+  "Which machine do you mean by 'the X box'?", with this machine and each machine the agent's
+  memory names as choices. Until the user picks, the target stays TO CONFIRM, even when memory and
+  the nickname agree.
+- Measured on this release's exact text, with the field request and a memory note naming another
+  machine (four runs): all four asked that question first, with this machine among the choices;
+  none connected anywhere; none of the three briefs written marked the machine CONFIRMED. One run
+  stopped after printing its questions, because the request asked "what do you need to ask?". Two
+  earlier wordings fell short. Without fixed words, one run of three asked only how much it could
+  read on the remembered machine. With fixed words but without "even when they agree", one brief
+  of four marked the remembered machine CONFIRMED, citing "your words + profile memory".
+- Correction to the 0.0.2 entry, whose measurement note said every 0.0.2 run asked which machine
+  was meant. Four of five did. The five runs used three successive drafts of 0.0.2 (one ran the
+  published text), and both 0.0.1 runs had also asked first where the skill should run, so asking
+  was not new in 0.0.2. The measured difference was the CONFIRMED label: one brief of two on 0.0.1,
+  none of five on the 0.0.2 drafts. The note had been scored by matching patterns in the questions
+  instead of reading them.
+- A few sentences shortened to stay inside the skill's 12,000-character limit.
+
 ## 0.0.2 — 2026-10-12
 
 Fixes from the first field use, on a home network where several machines run Hermes.
@@ -29,6 +50,8 @@ Fixes from the first field use, on a home network where several machines run Her
   and every run asked which machine it was. A plain build request with no answers still produced a
   brief that passes the self-check. When the request itself asks "what do you need to ask?", some
   runs answer with the questions and stop instead of writing a brief on defaults.
+  (Corrected in 0.0.3: four of the five asked which machine was meant, not every run, and the five
+  runs used three successive drafts of this release.)
 
 ## 0.0.1 — 2026-10-12
 
