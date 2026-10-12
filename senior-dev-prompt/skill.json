@@ -1,0 +1,25 @@
+{
+  "name": "senior-dev-prompt",
+  "version": "0.0.1",
+  "category": "software-development",
+  "description": "Use when a rough build idea needs a senior-dev prompt.",
+  "needs_reviewer_config": false,
+  "skill_files": [
+    "README.md",
+    "references/brief-template.md",
+    "references/routing.md",
+    "references/codev-review.md",
+    "references/safeguards.md",
+    "references/examples/greenfield-skill-n2.md",
+    "references/examples/bugfix-n0.md",
+    "references/packs/agent-skill.md",
+    "references/packs/web-app.md",
+    "references/packs/script-cli.md",
+    "references/packs/bot-integration.md",
+    "scripts/lint_brief.py",
+    "scripts/scout.py",
+    "scripts/test_scripts.py"
+  ],
+  "verify_skill": "scripts/test_scripts.py",
+  "next_step": "ask for it: \"turn this into a proper brief: <your idea>\""
+}
