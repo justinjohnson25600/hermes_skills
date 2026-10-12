@@ -1,6 +1,6 @@
 {
   "name": "senior-dev-prompt",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "category": "software-development",
   "description": "Use when a rough build idea needs a senior-dev prompt.",
   "needs_reviewer_config": false,

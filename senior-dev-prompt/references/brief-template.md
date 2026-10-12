@@ -45,7 +45,8 @@ Numbering (`## 1. For you`) is optional; the heading words are not.
    follow the quote as ASSUMED lines. Only the quoted lines are exempt from the self-check.
 4. `## Context` — greenfield (the project folder: named after the slug in the user's projects
    directory when the profile states one, otherwise under the workspace; created at execution with
-   version control) or existing (path and what was read). Environment. Profile preferences labelled
+   version control) or existing (path and what was read). Environment, and the target machine (this
+   one unless the user confirmed another). Profile preferences labelled
    ASSUMED (profile). The reuse check result. Recommended tools, at most 5: name, what it adds,
    source, trust tier, and installed / offered / declined.
 5. `## Outcome, users and scenario` — SC-1: one representative input or action and its observable
@@ -96,12 +97,16 @@ quote, SC-1 and SC-2) · `## Scope` (in and out) · `## Decisions` (`| Decision 
 - Amendments keep identifiers stable: new items take new numbers; removed items stay, marked
   `(withdrawn in vN)`. Bump the version and add a line to a closing `## Change log` section, for
   example `- v2 (2026-10-12): installed writing-plans; route D → A`.
+- Numbers (time, cost, tokens, sizes) carry their source: measured (name the artefact) or projected
+  (state the basis). A projection stays ASSUMED until it is measured.
 
 ## Word budgets
 
 T0–T1: 350 words. T2: 1,500. T3–T4: 3,000. Not counted: quoted lines, the metadata line and the
 Co-developer review section. Over budget: cut repetition, move detail into tables, or re-check the
-tier.
+tier. Draft to about 90% of the budget, watching the count as you write. When a cut is needed, make
+a few large edits, starting with any section that repeats a table or register (replace it with a
+pointer): one-word trims cost a self-check round each, and retyping whole sections adds new errors.
 
 ## Placeholders
 

@@ -1,7 +1,7 @@
 ---
 name: senior-dev-prompt
 description: Use when a rough build idea needs a senior-dev prompt.
-version: 0.0.1
+version: 0.0.2
 author: Justin Johnson, Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -38,11 +38,12 @@ steps get inline equivalents), dev-pair (co-developer review), and Python 3.8+ t
 
 ## Hard rules
 - **H1** Briefing writes only the brief file (and its folders), temporary review evidence and
-  dev-pair's own state. No code, config or installs; installs happen only at hand-off (H11).
+  dev-pair's own state. No code, config or installs; installs happen only at hand-off (H11). Read
+  only on this machine; never connect to another while briefing.
 - **H2** One question round: at most 5 questions in one `clarify` call, in plain language, each with
   "Not sure — use your recommendation"; never re-ask a stated fact. A second round only for a new
-  material fork, one bundled clarification of a paid reviewer choice, or the user's choice to answer
-  remaining blockers.
+  material fork, one bundled clarification of a paid reviewer choice, the user's choice to answer
+  remaining blockers, or a missed round the user asks for again (same questions).
 - **H3** Every inference is ASSUMED with its reason; CONFIRMED is only what the user said or
   inspection proved.
 - **H4** Name only skills verified installed, one by one; a missing step uses its inline equivalent.
@@ -77,11 +78,12 @@ or rambling input stays quoted as given; list each non-obvious interpretation as
 (a path, "my repo", "my app", file names). Then read instruction files in full (README, AGENTS.md,
 CLAUDE.md, contributing notes), the manifest, the layout and whether `.planning/` exists, and source
 only where a constraint depends on it. Briefing is not diagnosis: change nothing in the project
-(running its existing tests to see a failure is fine when the run writes nothing into the project,
-for example with caches disabled). In a project root with no project named,
+(running its tests is fine if the run writes nothing into it, e.g. with caches
+disabled). In a project root with no project named,
 "fix" means this project (ASSUMED: there is nothing new to fix), "add / change" puts "this project
-or a new one?" into intake, and "build / make / create" stays greenfield (ASSUMED). Profile
-knowledge is a labelled preference. Detect each workflow
+or a new one?" into intake, and "build / make / create" stays greenfield (ASSUMED). Memory and
+notes are labelled preferences, not facts about the target: a machine or place named by
+nickname ("the X box") is confirmed in intake. Detect each workflow
 skill individually, dev-pair (`devpair doctor`, static only) and the driver model and provider.
 *Done when* the context record lists greenfield or existing, stack signals, installed workflow
 skills, the driver and K.
@@ -108,10 +110,12 @@ typical gaps. T0–T1: outcome, platforms, data and state, success criteria, sco
 INFERRED / MATERIAL-MISSING / MINOR-MISSING; rank material gaps (architecture > scope > cost and
 risk) and note whether each has a safe default.
 
-**Step 4 — Intake.** One `clarify` call (H2): the project or split question first when they arise,
-the co-developer count when K ≥ 1 (exact wording in `references/codev-review.md`), then the top
-material gaps. No material gaps: skip intake. No `clarify` tool: ask the same numbered questions in
-one plain message and stop. Unanswered: safe default → ASSUMED and TO CONFIRM; none → BLOCKING.
+**Step 4 — Intake.** One `clarify` call (H2): the target, project or split question first when
+they arise, the co-developer count when K ≥ 1 (exact wording in `references/codev-review.md`), then
+the top material gaps. No material gaps: skip intake. No `clarify` tool: ask the same numbered
+questions in one plain message and stop. Unanswered: safe default → ASSUMED and TO CONFIRM; none →
+BLOCKING. Unconfirmed, the target is this machine unless reading it shows otherwise; it stays TO
+CONFIRM, and work on another machine becomes the plan's first task.
 
 **Step 5 — Route** with `references/routing.md`, checking every skill of the chain. *Done when* the
 route has real values and its matrix cell is recorded.
@@ -158,13 +162,11 @@ Exit codes: 0 pass, 1 findings, 2 usage. `scout.py` never installs; a slow or fa
 ERROR line, and its `MISSING` lines carry install candidates for missing workflow skills.
 
 ## Pitfalls
-- With the skill active, "login is broken, fix it" in a repository still gets a brief: measured
-  before release, the pull to patch the bug at once won over the skill until this was explicit.
+- With the skill active, "login is broken, fix it" in a repository still gets a brief (measured:
+  until this line existed, the agent patched the bug instead).
 - "Please start" is not "implement without showing the plan": every Run-now prompt names its stop.
-- Hub results list one skill on several registries; recommend one, not its copies.
+- Hub results repeat one skill across registries: recommend one.
 - The reviewer count is the number of paid calls, a confirmed same-family exception included.
-- Briefing an existing project is not debugging it; record what you could not establish as ASSUMED.
-- A newly installed skill is visible only to new sessions.
 
 ## Verification
 - The handed-off brief passes `scripts/lint_brief.py` (show the PASS line).

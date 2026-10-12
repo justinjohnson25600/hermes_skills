@@ -19,6 +19,10 @@ shows you the plan before building.
 - **Writes the brief and nothing else in your project:** one file under `.hermes/plans/` in your
   workspace (review evidence, if any, goes to a temporary folder). No code, no configuration
   changes and no installs while briefing; a paid review happens only if you ask for one.
+- **Stays on the machine you are talking to:** it reads only this machine and never connects to
+  another one while briefing. If your request names a machine or place by nickname ("the server",
+  "the office box"), it asks which one you mean; work on another machine becomes the plan's first
+  task.
 - **Brings specialist checklists** for four kinds of build (agent skills and plugins, web apps,
   scripts and command-line tools, bots and integrations), so the brief covers what a requester rarely
   mentions: dry-runs and undo for scripts, rate limits and kill switches for bots, accessibility and
@@ -138,6 +142,10 @@ On Windows use `py` or Hermes' own interpreter. `--json` gives machine-readable 
 - **Where is my brief?** In `.hermes/plans/` inside the folder the session started in. A session
   started at the top of the disk or in Hermes' own folder saves under your home folder instead. The
   hand-off always shows the full path.
+- **It asked which machine I meant:** your request named a machine or place by nickname, and the
+  agent's memory could point at more than one. Answer once; left unanswered, the brief targets the
+  machine you are talking to (unless what it can read there shows you meant another) and marks that
+  TO CONFIRM.
 
 ## Honest limits
 
@@ -150,4 +158,4 @@ On Windows use `py` or Hermes' own interpreter. `--json` gives machine-readable 
 
 ## Version
 
-0.0.1 — see [CHANGELOG.md](CHANGELOG.md). Semver; +0.0.1 per published change.
+0.0.2 — see [CHANGELOG.md](CHANGELOG.md). Semver; +0.0.1 per published change.
