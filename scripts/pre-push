@@ -3,14 +3,37 @@
 #
 # Blocks a push when the published docs would disagree with the code — the
 # failure that shipped a README a version behind to a public repo.
+#
+# It checks exactly what is being pushed: the tip commit of each pushed ref is
+# checked out into a temporary worktree and check_consistency.py runs there.
+# Checking the working tree instead let untracked work in progress block a push,
+# and let uncommitted fixes hide an inconsistent commit.
 # Bypass (rarely correct): git push --no-verify
 py=$(command -v python3.11 || command -v python3 || command -v python)
 [ -z "$py" ] && { echo "pre-push: no python found; skipping consistency gate"; exit 0; }
-"$py" "$(git rev-parse --show-toplevel)/check_consistency.py" --no-fetch || {
+zero=0000000000000000000000000000000000000000
+status=0
+checked=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue          # deleting a remote branch
+  wt=$(mktemp -d "${TMPDIR:-/tmp}/prepush.XXXXXX") || { status=1; break; }
+  rmdir "$wt"
+  if ! git worktree add -q --detach "$wt" "$local_sha"; then
+    echo "pre-push: could not check out $local_sha for checking"
+    status=1
+    continue
+  fi
+  echo "pre-push: checking $local_ref ($local_sha)"
+  (cd "$wt" && "$py" check_consistency.py --no-fetch) || status=1
+  git worktree remove --force "$wt"
+  checked=$((checked + 1))
+done
+if [ $status -ne 0 ]; then
   echo ""
-  echo "pre-push BLOCKED: docs and code disagree."
-  echo "  fix:    python3 check_consistency.py --fix"
+  echo "pre-push BLOCKED: docs and code disagree in the commit being pushed."
+  echo "  fix:    python3 check_consistency.py --fix, then commit"
   echo "  bypass: git push --no-verify   (only if you mean it)"
   exit 1
-}
+fi
+[ $checked -eq 0 ] && echo "pre-push: nothing to check (no commits pushed)"
 exit 0
