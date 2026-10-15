@@ -2,6 +2,13 @@
 
 All notable changes to senior-dev-prompt. Semver; every published change bumps the patch number.
 
+## 0.0.4
+- Landed from the live authoring copy (was never committed): H5 consent wording reworked -
+  naming a reviewer authorizes its initial call; explicit "iterate until agreement" also
+  authorizes necessary follow-ups and only named fallbacks; verify reported routes separately
+  from model-family attribution; reference to references/codev-review.md
+- 0.0.3's intro wording tightened; machine-question target stays TO CONFIRM until the user picks
+
 ## 0.0.3 — 2026-10-12
 
 - A machine or place named by nickname ("the X box") gets the first question, in fixed words:
