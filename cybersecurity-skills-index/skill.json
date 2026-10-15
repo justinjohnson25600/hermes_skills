@@ -1,0 +1,18 @@
+{
+    "name": "cybersecurity-skills-index",
+    "version": "0.1.0",
+    "category": "security",
+    "description": "On-demand lookup over 818 security procedure skills; one prompt row.",
+    "upstream": "mukul975/Anthropic-Cybersecurity-Skills",
+    "upstream_pin": "see UPSTREAM.md (index 1.1.0, 2026-08-24)",
+    "license": "Apache-2.0",
+    "platforms": [
+        "macos",
+        "linux",
+        "windows"
+    ],
+    "skill_files": [
+        "UPSTREAM.md"
+    ],
+    "next_step": "Search references/index.json for the matching procedure, then read its SKILL.md."
+}

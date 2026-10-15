@@ -1,0 +1,18 @@
+{
+    "name": "anthropic-skills-index",
+    "version": "0.1.0",
+    "category": "productivity",
+    "description": "Run 15 open-license Anthropic skills on demand; pointers to the proprietary doc suite.",
+    "upstream": "anthropics/skills",
+    "upstream_pin": "imported 2026-10-15 (main)",
+    "license": "Apache-2.0; doc suite remains (c) Anthropic, pointers only",
+    "platforms": [
+        "macos",
+        "linux",
+        "windows"
+    ],
+    "skill_files": [
+        "UPSTREAM.md"
+    ],
+    "next_step": "read_file references/library/<name>/SKILL.md for the matching task."
+}

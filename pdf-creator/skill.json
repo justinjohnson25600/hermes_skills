@@ -1,0 +1,21 @@
+{
+    "name": "pdf-creator",
+    "version": "0.1.0",
+    "category": "software-development",
+    "description": "Markdown to print-ready PDF with CJK fonts, themes, visual self-check.",
+    "upstream": "daymade/claude-code-skills",
+    "upstream_pin": "6b2096236262bc5b43ba5c0b9ec25084addef0fd",
+    "license": "MIT",
+    "platforms": [
+        "macos",
+        "linux",
+        "windows"
+    ],
+    "skill_files": [
+        "scripts/batch_convert.py",
+        "scripts/check_table_borders.py",
+        "scripts/md_to_pdf.py",
+        "UPSTREAM.md"
+    ],
+    "next_step": "Loads automatically when a matching task appears."
+}

@@ -1,6 +1,13 @@
 [
-  "dev-pair",
-  "llm-council",
-  "senior-dev-prompt",
-  "verify-results"
+    "agent-reach",
+    "anthropic-skills-index",
+    "caveman",
+    "cybersecurity-skills-index",
+    "dev-pair",
+    "humanizer",
+    "llm-council",
+    "make-interfaces-feel-better",
+    "pdf-creator",
+    "senior-dev-prompt",
+    "verify-results"
 ]

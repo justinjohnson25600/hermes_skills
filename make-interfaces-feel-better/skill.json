@@ -1,0 +1,23 @@
+{
+    "name": "make-interfaces-feel-better",
+    "version": "0.1.0",
+    "category": "software-development",
+    "description": "UI polish principles: animations, typography, shadows, hover states.",
+    "upstream": "jakubkrehel/make-interfaces-feel-better",
+    "upstream_pin": "35545ea1512ad59fa463e6b1f95ca9c052981fe6",
+    "license": "MIT",
+    "platforms": [
+        "macos",
+        "linux",
+        "windows"
+    ],
+    "skill_files": [
+        "animations.md",
+        "icons.md",
+        "performance.md",
+        "surfaces.md",
+        "typography.md",
+        "UPSTREAM.md"
+    ],
+    "next_step": "Loads automatically when a matching task appears."
+}
