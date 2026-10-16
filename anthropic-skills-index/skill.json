@@ -12,7 +12,11 @@
         "windows"
     ],
     "skill_files": [
-        "UPSTREAM.md"
+        "UPSTREAM.md",
+        "scripts/bootstrap_library.py"
     ],
-    "next_step": "read_file references/library/<name>/SKILL.md for the matching task."
+    "next_step": "read_file references/library/<name>/SKILL.md for the matching task.",
+    "vendored_library_dirs": [
+        "references/library"
+    ]
 }

@@ -44,6 +44,11 @@ problems: list[str] = []
 fixes: list[str] = []
 notes: list[str] = []
 
+# Code bearers: an undeclared one reaches no node (install.py ships declared
+# files only). Docs/markdown are deliberately exempt — the repo may carry
+# authoring docs that do not ship.
+CODE_EXTS = (".py", ".sh", ".ps1", ".js", ".mjs", ".ts")
+
 
 def fail(msg: str) -> None:
     problems.append(msg)
@@ -233,6 +238,72 @@ def check_test_counts(skill: str, fix: bool) -> None:
                          f"the suite reports {checks}")
 
 
+def check_manifest_covers_code(skill: str) -> None:
+    """Every code file tracked in a skill dir must be declared in skill.json.
+
+    install.py ships declared files only, so an undeclared script ships to NO
+    ONE while sitting in the repo looking released. This is the 0.0.4
+    senior-dev-prompt class: test_scripts.py (191 checks) shipped without
+    review_gate.py / test_review_gate.py, and nine Windows verifies failed on
+    FileNotFoundError before the manifest was completed in 0.0.5.
+    """
+    d = ROOT / skill
+    try:
+        sj = json.loads((d / "skill.json").read_text(encoding="utf-8"))
+    except Exception:
+        return  # malformed manifest handled by check_versions
+    declared = set(sj.get("skill_files", [])) | set(sj.get("files", []))
+    # Vendored reference trees (e.g. an upstream skill library bundled for
+    # read-on-demand) are repo-review content, not per-file shipped payload:
+    # exempt from per-file declaration, delivered by the skill's bootstrap.
+    exempt_dirs = tuple(d.rstrip("/") + "/" for d in sj.get("vendored_library_dirs", []))
+    tracked = _git_tracked_files(skill)
+    undeclared = sorted(
+        f for f in tracked
+        if f.endswith(CODE_EXTS) and f not in declared
+        and not f.startswith(exempt_dirs))
+    if undeclared:
+        fail(f"[{skill}] code file(s) tracked in repo but NOT declared in "
+             f"skill.json (install.py ships declared files only — these "
+             f"reach no node): {', '.join(undeclared)}")
+
+
+def _git_tracked_files(skill: str) -> set[str]:
+    out = sh("git", "ls-files", skill)
+    prefix = skill + "/"
+    return {line[len(prefix):] for line in out.splitlines()
+            if line.startswith(prefix)}
+
+
+IGNORED_FILE_NAMES = {"__pycache__", ".DS_Store"}
+
+
+def check_live_inventory(skill: str, sj: dict) -> None:
+    """Every file in the live authoring install must exist in the repo tree.
+
+    A live file the repo lacks is work that the next deploy will DESTROY
+    (install-only boxes) or a release shipped without it (authoring box) —
+    the original senior-dev-prompt failure: v0.0.4 lived on disk for weeks
+    with scripts/review_gate.py never committed.
+    """
+    home = hermes_home()
+    if not home:
+        return
+    live_dir = home / "skills" / sj.get("category", "") / skill
+    if not live_dir.is_dir():
+        return
+    tracked = _git_tracked_files(skill)
+    for p in live_dir.rglob("*"):
+        if not p.is_file() or p.suffix == ".pyc":
+            continue
+        if any(part in IGNORED_FILE_NAMES for part in p.parts):
+            continue
+        rel = p.relative_to(live_dir).as_posix()
+        if rel not in tracked:
+            fail(f"[{skill}] live file NOT in repo — land it (contribute.py "
+                 f"flow) or it will be destroyed by the next deploy: {rel}")
+
+
 def check_platforms(skill: str) -> None:
     sk = (ROOT / skill / "SKILL.md").read_text(encoding="utf-8")
     m = re.search(r"^platforms:\s*\[([^\]]*)\]", sk, re.M)
@@ -364,6 +435,12 @@ def main() -> int:
         check_test_counts(s, a.fix)
         check_platforms(s)
         check_live_install(s, a.fix)
+        check_manifest_covers_code(s)
+        try:
+            sj_live = json.loads((ROOT / s / "skill.json").read_text(encoding="utf-8"))
+        except Exception:
+            sj_live = {}
+        check_live_inventory(s, sj_live)
         if v:
             print(f"  {s}: {v}")
 

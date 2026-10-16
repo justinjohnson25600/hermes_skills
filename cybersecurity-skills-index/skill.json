@@ -12,7 +12,20 @@
         "windows"
     ],
     "skill_files": [
-        "UPSTREAM.md"
+        "UPSTREAM.md",
+        "scripts/bootstrap_library.py",
+        "LICENSE",
+        "references/index.json",
+        "references/mappings/README.md",
+        "references/mappings/attack-navigator-layer.json",
+        "references/mappings/owasp/README.md",
+        "references/mappings/nist-csf/README.md",
+        "references/mappings/nist-csf/csf-alignment.md",
+        "references/mappings/mitre-attack/coverage-summary.md",
+        "references/mappings/mitre-attack/README.md"
     ],
-    "next_step": "Search references/index.json for the matching procedure, then read its SKILL.md."
+    "next_step": "Search references/index.json for the matching procedure, then read its SKILL.md.",
+    "vendored_library_dirs": [
+        "references/library"
+    ]
 }
