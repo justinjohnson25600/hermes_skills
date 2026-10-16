@@ -1,7 +1,7 @@
 ---
 name: senior-dev-prompt
 description: Use when a rough build idea needs a senior-dev prompt.
-version: 0.0.4
+version: 0.0.5
 author: Justin Johnson, Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]

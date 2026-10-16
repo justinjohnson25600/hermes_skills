@@ -1,6 +1,6 @@
 {
     "name": "senior-dev-prompt",
-    "version": "0.0.4",
+    "version": "0.0.5",
     "category": "software-development",
     "description": "Use when a rough build idea needs a senior-dev prompt.",
     "needs_reviewer_config": false,
@@ -18,6 +18,8 @@
         "references/packs/bot-integration.md",
         "scripts/lint_brief.py",
         "scripts/scout.py",
+        "scripts/review_gate.py",
+        "scripts/test_review_gate.py",
         "scripts/test_scripts.py"
     ],
     "verify_skill": "scripts/test_scripts.py",

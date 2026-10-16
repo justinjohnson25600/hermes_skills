@@ -2,6 +2,12 @@
 
 All notable changes to senior-dev-prompt. Semver; every published change bumps the patch number.
 
+## 0.0.5
+- skill.json now declares scripts/review_gate.py and scripts/test_review_gate.py —
+  0.0.4 shipped the 191-check test_scripts.py without the files it exercises, so
+  every Windows verify failed with FileNotFoundError (install.py ships declared
+  files only). Manifest-complete is part of the release, not an afterthought.
+
 ## 0.0.4
 - Landed from the live authoring copy (was never committed): H5 consent wording reworked -
   naming a reviewer authorizes its initial call; explicit "iterate until agreement" also
