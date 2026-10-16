@@ -123,7 +123,7 @@ and run the tests.
 ```bash
 python3 scripts/lint_brief.py .hermes/plans/2026-10-12_101500-photo-renamer-brief.md   # exit 0 pass, 1 findings, 2 usage
 python3 scripts/scout.py --pack script-cli --want writing-plans --max 5                   # read-only; never installs
-python3 scripts/test_scripts.py                                                           # 7 regression tests (186 checks)
+python3 scripts/test_scripts.py                                                           # 8 regression tests (191 checks)
 ```
 
 On Windows use `py` or Hermes' own interpreter. `--json` gives machine-readable output.

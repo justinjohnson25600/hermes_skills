@@ -4,7 +4,7 @@
     "category": "productivity",
     "description": "Run 15 open-license Anthropic skills on demand; pointers to the proprietary doc suite.",
     "upstream": "anthropics/skills",
-    "upstream_pin": "imported 2026-10-15 (main)",
+    "upstream_pin": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
     "license": "Apache-2.0; doc suite remains (c) Anthropic, pointers only",
     "platforms": [
         "macos",

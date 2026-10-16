@@ -1,7 +1,7 @@
 # Upstream: mukul975/Anthropic-Cybersecurity-Skills
 
 - Source: https://github.com/mukul975/Anthropic-Cybersecurity-Skills
-- Imported upstream index version: 1.1.0 (generated 2026-08-24)
+- Imported upstream commit `54a798831d2266a3ca61ce68a7acb80b81160d57` (index 1.1.0)
 - License: Apache-2.0 (LICENSE file carried at skill root)
 - Contents: references/library/ = upstream skills/ verbatim; references/index.json =
   upstream index.json; references/mappings/ = upstream MITRE/NIST/OWASP mappings.

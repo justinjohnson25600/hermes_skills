@@ -1,7 +1,7 @@
 # Upstream: anthropics/skills
 
 - Source: https://github.com/anthropics/skills
-- Imported: 2026-10-15 (main)
+- Imported: 2026-10-15, commit `dbd4588f9e1033efb41dad4bef2f7947c8993d44`
 - License: mixed — skills under references/library/ are Apache-2.0 (each carries
   its own LICENSE.txt); the document suite (docx, pdf, pptx, xlsx) is
   © Anthropic, PBC, not redistributed — pointers only.

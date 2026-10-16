@@ -535,10 +535,18 @@ def test_skill_md():
         check(f"hard rule {rule} stated", re.search(rf"\*\*{rule}\b", t) is not None)
 
 
+def test_review_handoff():
+    print("\n[review handoff] real CLI behavior contracts")
+    r = _run_script("test_review_gate.py", env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    collected = re.search(r"Ran (\d+) tests?", r.stderr)
+    check("review handoff contracts pass with nonzero collection", r.returncode == 0 and collected is not None and int(collected.group(1)) > 0 and "OK" in r.stderr,
+          r.stdout + r.stderr)
+
+
 def test_portability():
     print("\n[portability] Python 3.8 syntax; the runner fails loudly")
     import ast
-    for f in ("lint_brief.py", "scout.py", "test_scripts.py"):
+    for f in ("lint_brief.py", "scout.py", "test_scripts.py", "review_gate.py", "test_review_gate.py"):
         src = (HERE / f).read_text(encoding="utf-8")
         try:
             ast.parse(src, feature_version=(3, 8))
@@ -571,6 +579,7 @@ def main():
         test_examples_and_template,
         test_packs,
         test_skill_md,
+        test_review_handoff,
         test_portability,
     ):
         try:

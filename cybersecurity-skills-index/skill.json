@@ -4,7 +4,7 @@
     "category": "security",
     "description": "On-demand lookup over 818 security procedure skills; one prompt row.",
     "upstream": "mukul975/Anthropic-Cybersecurity-Skills",
-    "upstream_pin": "see UPSTREAM.md (index 1.1.0, 2026-08-24)",
+    "upstream_pin": "54a798831d2266a3ca61ce68a7acb80b81160d57",
     "license": "Apache-2.0",
     "platforms": [
         "macos",
