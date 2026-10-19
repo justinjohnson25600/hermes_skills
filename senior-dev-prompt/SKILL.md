@@ -1,7 +1,7 @@
 ---
 name: senior-dev-prompt
 description: Use when a rough build idea needs a senior-dev prompt.
-version: 0.0.5
+version: 0.0.6
 author: Justin Johnson, Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -39,7 +39,8 @@ steps get inline equivalents), dev-pair (co-developer review), and Python 3.8+ t
   dev-pair's own state. No code, config or installs; installs happen only at hand-off (H11). Read
   only on this machine; never connect to another while briefing.
 - **H2** One question round: at most 5 questions in one `clarify` call, in plain language, each with
-  "Not sure — use your recommendation"; never re-ask a stated fact. A second round only for a new
+  "Not sure — use your recommendation"; never re-ask a stated fact. A timed-out or cancelled form
+  answered by the next message counts as answered. A second round only for a new
   material fork, one bundled clarification of a paid reviewer choice, the user's choice to answer
   remaining blockers, or a missed round the user asks for again (same questions).
 - **H3** Every inference is ASSUMED with its reason; CONFIRMED is only what the user said or
@@ -161,6 +162,7 @@ ERROR line, and its `MISSING` lines carry install candidates for missing workflo
   is distinct from OpenAI, Anthropic and GLM even when a tool classifier lacks its entry.
 - Exhaust safe authorized alternatives before declaring a blocker; research a workable recurrence
   prevention solution, keep unaffected work moving, and never bypass scope or safety.
+- Over budget: cut large phrases in one pass; blank lines are not counted and gluing lines breaks sections.
 
 ## Verification
 - The handed-off brief passes `scripts/lint_brief.py` (show the PASS line).

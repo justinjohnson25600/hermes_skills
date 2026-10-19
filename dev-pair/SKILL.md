@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.4
+version: 1.2.5
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -298,6 +298,13 @@ The shipped roster is an example: a Kimi model, a Claude model, a GLM model,
 and a small local Qwen via LM Studio (works offline). Yours should name
 whatever providers your Hermes install has.
 
+When you edit the roster in `config.json`: back the file up first; declare
+`family` on any entry whose model and provider names do not reveal it (a
+DeepSeek model, a custom endpoint), or it is labelled INDEPENDENCE UNVERIFIED
+on every path; then confirm with `devpair doctor` (static) and a `--dry-run`
+that names the driver, which prints the reviewer that would answer and the
+fallback order. Entries missing from `order` still serve as fallbacks.
+
 ## The Rules That Make It Work
 
 1. **Give it real evidence.** `--diff`/`--files` beats describing the code. The
@@ -341,7 +348,7 @@ and challenges a wrong premise first. These are prompt-level Council crossovers
 
 - **Read the route receipt, not the banner.** Every attempt records requested vs REPORTED provider/model: inline prompts from Hermes' `--usage-file`, large (file-transport) prompts from Hermes' own session store (`state.db`, read-only) by the returned session id. `identity` is `reported-match`, `reported-mismatch` (also shouted on stderr, even with `--json`) or `unknown` — never assumed. A match is what Hermes reported, not cryptographic proof of the upstream model. Do not present a mismatched or unknown route as the requested model's endorsement; if a strict requested-provider probe fails authentication, report the blocker rather than substituting another model silently.
 - **User-requested reasoning effort is per invocation.** Confirm the installed Hermes CLI and target adapter support the requested level, then append e.g. `--reasoning max` to the native Hermes command prefix in `DEVPAIR_HERMES_CMD`; retain `--driver`, `--with` and `--requested-by user` on devpair. Do not change persistent model/config defaults for a review. `--timeout`/`--budget` limit wall-clock, not reasoning effort; elapsed time or token totals do not prove a named model ran at max.
-- **Large prompts travel by file, not argv.** Past ~30k chars on Windows (CreateProcess caps a command line at 32,767) the prompt goes through a private temp file to `hermes chat -Q --query-file --format stream-json`; `DEVPAIR_PROMPT_TRANSPORT=inline|file|auto` overrides. A forced-inline oversize prompt is reported as "too large", never as "CLI not found".
+- **Large prompts travel by file, not argv.** Past ~30k chars on Windows (CreateProcess caps a command line at 32,767) the prompt goes through a private temp file to `hermes chat -Q --query-file --format stream-json`; `DEVPAIR_PROMPT_TRANSPORT=inline|file|auto` overrides. A forced-inline oversize prompt is reported as "too large", never as "CLI not found". If a reviewer's answer arrives but the call never returns (observed under a profile with host-isolated plugins and MCP servers), set `DEVPAIR_PROMPT_TRANSPORT=file` and repeat the dry run: the `--query-file` path exits cleanly there.
 - **Provider rate-limiting masquerades as a timeout.** An upstream HTTP 429 exhausts the CLI's 3 retries slowly and presents as "reviewer timed out after Ns". Probe cheaply (`hermes -z "Reply PROBE_OK" -m <model> --provider <p> -t context_engine --ignore-rules` — never `-t ""`, which loads every tool); if the probe fails fast with a usage limit, wait for the reset time named in the failure text and probe again. Spend the paid review only once a probe answers: a review sent into a live limit still burns a capped attempt plus minutes of timeout. A timeout kills the whole reviewer process tree.
 - **Under an MSYS/git-bash terminal `shutil.which('hermes')` fails for the child python** (POSIX-mangled PATH) — every review dies as "CLI not found" while `devpair doctor` (direct API probes) stays green. Set `DEVPAIR_HERMES_CMD` to the NATIVE absolute path of hermes.exe; bash-exported env can also vanish through extra spawn layers, so the durable fix is a self-setting shim (`if not defined DEVPAIR_HERMES_CMD set "DEVPAIR_HERMES_CMD=%~dp0hermes.exe"` in devpair.cmd).
 - **Reviewing with no evidence** produces generic advice. Attach the diff or files.

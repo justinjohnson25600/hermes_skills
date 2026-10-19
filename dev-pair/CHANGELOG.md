@@ -2,6 +2,17 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.5 — 2026-10-19
+
+Documentation only; no code change. Landed from the live authoring copy, where
+these lines had been honed but never published (the release gate flagged them).
+
+- **Editing the reviewer roster:** back up `config.json` first, declare `family`
+  on entries whose names do not reveal it, then confirm with `devpair doctor` and
+  a `--dry-run` that names the driver.
+- **A review that answers but never returns:** set `DEVPAIR_PROMPT_TRANSPORT=file`
+  and repeat the dry run; the `--query-file` path exits cleanly.
+
 ## 1.2.4 — 2026-10-11
 
 Four defects found while rolling 1.2.3 out to eleven machines. No interface

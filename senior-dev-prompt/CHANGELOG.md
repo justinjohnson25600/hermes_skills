@@ -2,6 +2,13 @@
 
 All notable changes to senior-dev-prompt. Semver; every published change bumps the patch number.
 
+## 0.0.6
+- H2: a clarify form that times out or is cancelled, then answered by the user's next
+  message, counts as answered; proceed on it and never re-ask.
+- Pitfall: when over the word budget, cut a few large phrases in one editing pass;
+  deleting blank lines saves nothing and gluing lines together breaks section structure.
+- Landed from the live authoring copy, where it had been honed but never published.
+
 ## 0.0.5
 - skill.json now declares scripts/review_gate.py and scripts/test_review_gate.py —
   0.0.4 shipped the 191-check test_scripts.py without the files it exercises, so
