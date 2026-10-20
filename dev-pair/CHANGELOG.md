@@ -2,6 +2,36 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.6 — 2026-10-20
+
+A finished review is no longer thrown away when the Hermes launcher prints
+nothing. Found when a gpt-6.1-sol critique on Windows completed (usage file
+written, reply saved in the session store) while devpair reported "no output
+from reviewer" and exited 1.
+
+- **Windows uses the installer's CLI instead of a virtualenv launcher.** PATH
+  listed `hermes-agent\venv\Scripts\hermes.exe` first. Given the same one-word
+  `-z` prompt, that launcher exited with nothing on stdout or stderr, while
+  `<hermes-home>\bin\hermes.exe` printed the reply. When PATH resolves to a
+  `Scripts\hermes.exe` launcher, or to nothing, devpair now uses
+  `<hermes-home>\bin\hermes.exe` if it exists; a profile home resolves to the
+  root's `bin`. A deliberate shim on PATH and `DEVPAIR_HERMES_CMD` still win,
+  and POSIX resolution is unchanged.
+- **A completed but silent turn is recovered, loudly.** When an inline run
+  exits 0 with nothing on stdout or stderr, yet its own usage report says the
+  turn completed with output tokens, devpair reads that session's last
+  assistant reply read-only from the Hermes session store. The receipt records
+  `recovered_from: session-store` and carries a warning that names the fix.
+  An incomplete or token-less turn is never recovered.
+- **The failure names its cause.** "no output from reviewer" now goes on to
+  say the backend exited 0 but printed nothing, and how to point
+  `DEVPAIR_HERMES_CMD` at a CLI that relays its output.
+- **`devpair doctor` warns** when the backend command is a virtualenv
+  launcher and the installer's CLI exists.
+- **Tests.** Six new regression tests: 110 tests, 605 checks. The check count
+  is now the same on every platform, because the release gate compares it with
+  the docs; platform-specific branches carry the same number of checks.
+
 ## 1.2.5 — 2026-10-19
 
 Documentation only; no code change. Landed from the live authoring copy, where
