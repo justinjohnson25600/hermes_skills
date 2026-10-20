@@ -11,7 +11,8 @@ Checks, per skill:
      own README, the repo-root table, and the newest CHANGELOG heading).
   2. Test-count claims in the docs match what the suite actually reports.
   3. `platforms:` frontmatter is a plausible list and matches any shim the
-     installer writes for that platform.
+     installer writes for that platform; the whole frontmatter block parses as
+     YAML the way Hermes reads it.
   4. The live install under the Hermes home (if present on this machine) is
      byte-identical for code, and differs from the repo SKILL.md ONLY by the
      known machine-local deltas.
@@ -304,6 +305,33 @@ def check_live_inventory(skill: str, sj: dict) -> None:
                  f"flow) or it will be destroyed by the next deploy: {rel}")
 
 
+def check_frontmatter(skill: str) -> None:
+    """Hermes parses SKILL.md frontmatter as YAML; a block it cannot parse makes the skill
+    invisible on every node. make-interfaces-feel-better 0.1.0 shipped an unquoted colon in
+    `description:` and Hermes never loaded it, while the regex checks below all passed."""
+    try:
+        import yaml
+    except ImportError:
+        fail(f"[{skill}] cannot check SKILL.md frontmatter: PyYAML is not installed for {sys.executable}")
+        return
+    text = (ROOT / skill / "SKILL.md").read_text(encoding="utf-8")
+    m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S)
+    if not m:
+        fail(f"[{skill}] SKILL.md does not open with a --- frontmatter block")
+        return
+    try:
+        fm = yaml.safe_load(m.group(1))
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at frontmatter line {mark.line + 1}" if mark else ""
+        fail(f"[{skill}] SKILL.md frontmatter is not valid YAML{where} "
+             f"({getattr(exc, 'problem', None) or exc}): Hermes cannot load the skill. "
+             f"Quote any value that contains ': '")
+        return
+    if not isinstance(fm, dict) or not fm.get("name") or not fm.get("description"):
+        fail(f"[{skill}] SKILL.md frontmatter must be a mapping with name and description")
+
+
 def check_platforms(skill: str) -> None:
     sk = (ROOT / skill / "SKILL.md").read_text(encoding="utf-8")
     m = re.search(r"^platforms:\s*\[([^\]]*)\]", sk, re.M)
@@ -433,6 +461,7 @@ def main() -> int:
     for s in skills():
         v = check_versions(s, a.fix)
         check_test_counts(s, a.fix)
+        check_frontmatter(s)
         check_platforms(s)
         check_live_install(s, a.fix)
         check_manifest_covers_code(s)

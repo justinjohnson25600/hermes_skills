@@ -13,7 +13,7 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 | [senior-dev-prompt](senior-dev-prompt/) | 0.0.6 | Turns a rough build request into a senior-developer brief: requirements, risk safeguards, checkable acceptance criteria and a workflow sized to the job (superpowers, GSD or inline steps). Optional review by other model families through dev-pair, and tool suggestions you choose to install. Writes the brief, never the build |
 | [verify-results](verify-results/) | 0.0.8 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
 | [caveman](caveman/) | 0.1.0 | Terse output mode that cuts token spend while keeping every fact (vendored: JuliusBrussee/caveman) |
-| [make-interfaces-feel-better](make-interfaces-feel-better/) | 0.1.0 | UI polish review: animations, typography, shadows, hit areas (vendored: jakubkrehel/make-interfaces-feel-better) |
+| [make-interfaces-feel-better](make-interfaces-feel-better/) | 0.1.1 | UI polish review: animations, typography, shadows, hit areas (vendored: jakubkrehel/make-interfaces-feel-better) |
 | [pdf-creator](pdf-creator/) | 0.1.0 | Markdown to print-ready PDF with CJK fonts, themes and visual self-check (vendored: daymade/claude-code-skills) |
 | [agent-reach](agent-reach/) | 0.1.0 | Routes web/social research to the right CLI; includes channel doctor (vendored: Panniantong/Agent-Reach) |
 | [anthropic-skills-index](anthropic-skills-index/) | 0.1.0 | 15 Apache-2.0 Anthropic skills vendored + install pointers for the proprietary doc suite |

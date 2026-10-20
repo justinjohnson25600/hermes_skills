@@ -1,6 +1,6 @@
 {
     "name": "make-interfaces-feel-better",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "category": "software-development",
     "description": "UI polish principles: animations, typography, shadows, hover states.",
     "upstream": "jakubkrehel/make-interfaces-feel-better",

@@ -1,7 +1,7 @@
 ---
 name: make-interfaces-feel-better
-description: UI polish principles: animations, typography, shadows, hover states.
-version: 0.1.0
+description: "UI polish principles: animations, typography, shadows, hover states."
+version: 0.1.1
 author: Justin Johnson (justinjohnson25600)
 license: MIT
 platforms: [macos, linux, windows]
