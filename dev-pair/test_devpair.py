@@ -152,13 +152,15 @@ class _env:
 
 
 def _argv_stub(base, reply="## VERDICT\nPROCEED\nok", usage=None, sleep=0, name="_argv_stub",
-               session_id=None, result_exit=0, usage_raw=None, spawn_child=False):
+               session_id=None, result_exit=0, usage_raw=None, spawn_child=False, silent=False):
     """A reviewer backend stub for DEVPAIR_HERMES_CMD. Records its argv and the
     HERMES_* env it received, writes `usage` (or `usage_raw` verbatim) to the
     --usage-file it was given, and answers a --query-file run in stream-json
     echoing the prompt's tail and length so tests can prove the whole prompt
     arrived. spawn_child=True starts a grandchild that heartbeats a file, so a
-    test can see whether the whole process TREE died. Never touches a network."""
+    test can see whether the whole process TREE died. silent=True prints nothing
+    at all on either transport: a launcher that completes the turn but relays no
+    output. Never touches a network."""
     impl = Path(base) / f"{name}.py"
     log = Path(base) / f"{name}.argv.json"
     envlog = Path(base) / f"{name}.env.json"
@@ -185,7 +187,10 @@ def _argv_stub(base, reply="## VERDICT\nPROCEED\nok", usage=None, sleep=0, name=
         "    elif usage is not None:\n"
         "        up.write_text(json.dumps(usage), encoding='utf-8')\n"
         f"reply = {reply!r}\n"
-        "if '--query-file' in a:\n"
+        f"silent = {silent!r}\n"
+        "if silent:\n"
+        "    pass\n"
+        "elif '--query-file' in a:\n"
         "    q = pathlib.Path(a[a.index('--query-file') + 1]).read_text(encoding='utf-8')\n"
         "    reply = reply + ' TAIL=' + q[-12:] + ' LEN=' + str(len(q))\n"
         "    print(json.dumps({'type': 'system', 'subtype': 'init', 'model': 'm'}))\n"
@@ -199,14 +204,22 @@ def _argv_stub(base, reply="## VERDICT\nPROCEED\nok", usage=None, sleep=0, name=
     return f'"{sys.executable}" "{impl}"', log
 
 
-def _fake_session_store(home: Path, sid: str, model: str, provider: str) -> None:
-    """A minimal Hermes state.db holding one session row, for receipt tests."""
+def _fake_session_store(home: Path, sid: str, model: str, provider: str, reply=None) -> None:
+    """A minimal Hermes state.db holding one session row, for receipt tests.
+    With `reply`, the session also holds a user turn and that assistant reply."""
     import sqlite3
     home.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(home / "state.db"))
     con.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, model TEXT, "
                 "billing_provider TEXT, billing_base_url TEXT)")
     con.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?)", (sid, model, provider, "https://x"))
+    if reply is not None:
+        con.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "session_id TEXT, role TEXT, content TEXT)")
+        con.execute("INSERT INTO messages (session_id, role, content) VALUES (?,?,?)",
+                    (sid, "user", "the prompt"))
+        con.execute("INSERT INTO messages (session_id, role, content) VALUES (?,?,?)",
+                    (sid, "assistant", reply))
     con.commit()
     con.close()
 
@@ -475,11 +488,136 @@ def test_oversized_inline_prompt_is_named_not_missing_cli(base):
         ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"},
                                        "X" * 300_000, 60, False)
     if ok:
+        # Three checks on this branch as on the other, so the count is platform-independent.
         check("platform accepted a 300k argv (no limit hit) — nothing to misreport", True)
+        check("…the receipt records the inline transport",
+              (devpair.last_receipt() or {}).get("transport") == "inline")
+        check("…and the receipt status is ok", (devpair.last_receipt() or {}).get("status") == "ok")
     else:
         check("oversize launch failure names the size problem", "too large" in msg, msg)
         check("…and does not blame a missing CLI", "not found" not in msg, msg)
         check("receipt status is too-large", (devpair.last_receipt() or {}).get("status") == "too-large")
+
+
+@isolated
+def test_silent_backend_reply_is_recovered_from_the_session_store(base):
+    print("\n[transport] a completed turn that printed nothing is recovered from the session store, loudly")
+    home = base / "hermes_home"
+    sid = "20261020_090639_abc123"
+    _fake_session_store(home, sid, "m", "p", reply="## VERDICT\nPROCEED\nrecovered review")
+    usage = {"provider": "p", "model": "m", "completed": True, "api_calls": 1,
+             "output_tokens": 42, "session_id": sid}
+    stub, _ = _argv_stub(base, reply="", usage=usage, name="stub_silent")
+    with _env(DEVPAIR_HERMES_CMD=stub, HERMES_HOME=str(home), HERMES_PROFILE=None,
+              DEVPAIR_PROMPT_TRANSPORT="inline"):
+        ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "review this", 60, False)
+    r = devpair.last_receipt() or {}
+    check("the completed reply is recovered, not discarded", ok and "recovered review" in msg, msg[:200])
+    check("the receipt says where the text came from", r.get("recovered_from") == "session-store", r)
+    check("a warning names the silent backend and the fix",
+          any("printed nothing" in w and "DEVPAIR_HERMES_CMD" in w for w in r.get("warnings") or []),
+          r.get("warnings"))
+    check("identity still comes from the backend's own usage report", r.get("identity") == "reported-match", r)
+
+
+@isolated
+def test_silent_backend_without_a_stored_reply_names_the_fix(base):
+    print("\n[transport] a silent backend with nothing recoverable says what to fix")
+    usage = {"provider": "p", "model": "m", "completed": True, "output_tokens": 42,
+             "session_id": "20261020_000000_nosuch"}
+    stub, _ = _argv_stub(base, reply="", usage=usage, name="stub_silent_norec")
+    with _env(DEVPAIR_HERMES_CMD=stub, HERMES_HOME=str(base / "empty_home"), HERMES_PROFILE=None,
+              DEVPAIR_PROMPT_TRANSPORT="inline"):
+        ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "review this", 60, False)
+    check("the attempt fails", not ok, msg)
+    check("the message keeps its old prefix", msg.startswith("no output from reviewer"), msg)
+    check("…and names the silent-backend cause and the fix",
+          "printed nothing" in msg and "DEVPAIR_HERMES_CMD" in msg, msg)
+
+
+@isolated
+def test_recovery_needs_a_completed_turn(base):
+    print("\n[transport] stored text is never used for an incomplete or token-less turn")
+    home = base / "hermes_home"
+    sid = "20261020_000000_def456"
+    _fake_session_store(home, sid, "m", "p", reply="## VERDICT\nPROCEED\nstale text")
+    cases = (("incomplete turn", {"provider": "p", "model": "m", "completed": False,
+                                  "output_tokens": 42, "session_id": sid}),
+             ("no output tokens", {"provider": "p", "model": "m", "completed": True,
+                                   "output_tokens": 0, "session_id": sid}))
+    for label, usage in cases:
+        stub, _ = _argv_stub(base, reply="", usage=usage, name="stub_" + label.replace(" ", "_"))
+        with _env(DEVPAIR_HERMES_CMD=stub, HERMES_HOME=str(home), HERMES_PROFILE=None,
+                  DEVPAIR_PROMPT_TRANSPORT="inline"):
+            ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "x", 60, False)
+        check(f"{label}: the stored text is not used", not ok and "stale text" not in msg, msg[:160])
+
+
+@isolated
+def test_silent_file_transport_names_the_fix(base):
+    print("\n[transport] a file-transport backend that prints nothing at all says what to fix")
+    stub, _ = _argv_stub(base, silent=True, name="stub_silent_file")
+    with _env(DEVPAIR_HERMES_CMD=stub, DEVPAIR_PROMPT_TRANSPORT="file"):
+        ok, msg = devpair.run_reviewer({"model": "m", "provider": "p", "label": "L"}, "review this", 60, False)
+    check("the attempt fails", not ok, msg)
+    check("the message names the silent backend and the fix",
+          "printed nothing" in msg and "DEVPAIR_HERMES_CMD" in msg, msg)
+
+
+@isolated
+def test_windows_prefers_the_installer_cli(base):
+    print("\n[launch] Windows: the installer CLI replaces a Scripts launcher or a failed PATH lookup")
+    home = base / "hermes_home"
+    (home / "bin").mkdir(parents=True)
+    cli = home / "bin" / "hermes.exe"
+    cli.write_bytes(b"")
+    prof = home / "profiles" / "work"
+    prof.mkdir(parents=True)
+    scripts = base / "venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    launcher = scripts / ("hermes.exe" if os.name == "nt" else "hermes")
+    launcher.write_bytes(b"")
+    if os.name != "nt":
+        launcher.chmod(0o755)
+    # PATH is pinned in every case: the developer's real PATH must not decide the result.
+    with _env(DEVPAIR_HERMES_CMD=None, HERMES_HOME=str(home), PATH=str(scripts)):
+        via_launcher = devpair._hermes_command()
+    with _env(DEVPAIR_HERMES_CMD=None, HERMES_HOME=str(prof), PATH=""):
+        via_profile = devpair._hermes_command()
+    with _env(DEVPAIR_HERMES_CMD="explicit-hermes", HERMES_HOME=str(home)):
+        explicit = devpair._hermes_command()
+    if os.name == "nt":
+        check("Windows: a Scripts launcher on PATH gives way to the installer CLI",
+              Path(via_launcher[0]) == cli, via_launcher)
+        check("Windows: a profile HERMES_HOME with nothing on PATH finds the root CLI",
+              Path(via_profile[0]) == cli, via_profile)
+    else:
+        check("POSIX: PATH resolution is unchanged", Path(via_launcher[0]) == launcher, via_launcher)
+        check("POSIX: nothing on PATH falls back to the bare name", via_profile == ["hermes"], via_profile)
+    check("an explicit DEVPAIR_HERMES_CMD still wins", explicit == ["explicit-hermes"], explicit)
+
+
+@isolated
+def test_doctor_warns_about_a_venv_launcher(base):
+    print("\n[doctor] a virtualenv launcher override is flagged when the installer CLI exists")
+    import io
+    home = base / "hermes_home"
+    (home / "bin").mkdir(parents=True)
+    cli = home / "bin" / "hermes.exe"
+    cli.write_bytes(b"")
+    scripts = base / "venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    launcher = scripts / "hermes.exe"
+    launcher.write_bytes(b"")
+    buf = io.StringIO()
+    with _env(DEVPAIR_HERMES_CMD=str(launcher), HERMES_HOME=str(home)), contextlib.redirect_stdout(buf):
+        devpair.cmd_doctor(argparse.Namespace(driver="zai/glm-5", live=False))
+    out = buf.getvalue()
+    if os.name == "nt":
+        check("Windows: doctor warns and names the installer CLI",
+              "virtualenv launcher" in out and str(cli) in out, out[-500:])
+    else:
+        check("POSIX: no Windows launcher warning", "virtualenv launcher" not in out, out[-500:])
 
 
 @isolated
@@ -551,11 +689,16 @@ def test_non_review_threshold_boundary():
           not devpair._is_non_review("review", "x" * n))
     check("a short reply WITH a verdict is a review", not devpair._is_non_review("review", "## VERDICT\nPROCEED"))
     check("debug mode has no verdict requirement", not devpair._is_non_review("debug", "short"))
+    def cmd(k):
+        return ["hermes", "-z", "x" * k]
+    # Same number of checks on every platform: the release gate compares the
+    # suite's check count with the docs, so a platform-only check is drift.
     if os.name == "nt":
-        def cmd(k):
-            return ["hermes", "-z", "x" * k]
         check("just under the Windows safe limit fits inline", devpair._fits_inline(cmd(29_900)))
         check("near the 32,767 hard limit does NOT fit inline", not devpair._fits_inline(cmd(32_000)))
+    else:
+        check("POSIX: a 29,900-char argument fits inline", devpair._fits_inline(cmd(29_900)))
+        check("POSIX: 32,000 chars fits too (no 32,767 command-line cap)", devpair._fits_inline(cmd(32_000)))
 
 
 @isolated
@@ -2076,12 +2219,15 @@ def _resolver_checks():
             os.environ["PATH"] = orig
 
     # With nothing on PATH it must fall back to the bare name, so the existing
-    # soft-failure path still handles a missing binary.
+    # soft-failure path still handles a missing binary. HERMES_HOME points at an
+    # empty dir: on Windows an installed <hermes-home>\bin\hermes.exe would
+    # (correctly) be found, and this check is about finding nothing at all.
     orig = os.environ.get("PATH", "")
     os.environ["PATH"] = ""
     try:
-        check("falls back to the bare name when absent",
-              devpair._hermes_command() == ["hermes"], "would raise instead of soft-failing")
+        with _temp_dir() as empty_home, _env(HERMES_HOME=empty_home):
+            check("falls back to the bare name when absent",
+                  devpair._hermes_command() == ["hermes"], "would raise instead of soft-failing")
     finally:
         os.environ["PATH"] = orig
 
@@ -2117,11 +2263,15 @@ def _resolver_checks():
               devpair._hermes_command() == [sys.executable],
               f"got {devpair._hermes_command()!r}")
 
-        # An override of only whitespace must not produce an empty command list.
+        # An override of only whitespace must not produce an empty command list:
+        # it must behave exactly as if no override were set.
         os.environ["DEVPAIR_HERMES_CMD"] = "   "
+        blank = devpair._hermes_command()
+        os.environ.pop("DEVPAIR_HERMES_CMD", None)
+        unset = devpair._hermes_command()
         check("a blank override falls back rather than emptying the command",
-              devpair._hermes_command() == [shutil.which("hermes") or "hermes"],
-              f"got {devpair._hermes_command()!r}")
+              blank == unset and len(blank) == 1 and bool(blank[0]),
+              f"got {blank!r}, no override gives {unset!r}")
     finally:
         if prev is None:
             os.environ.pop("DEVPAIR_HERMES_CMD", None)
@@ -3137,6 +3287,12 @@ def main():
         test_reviewer_gets_no_tools,
         test_large_prompt_travels_by_file_not_argv,
         test_oversized_inline_prompt_is_named_not_missing_cli,
+        test_silent_backend_reply_is_recovered_from_the_session_store,
+        test_silent_backend_without_a_stored_reply_names_the_fix,
+        test_recovery_needs_a_completed_turn,
+        test_silent_file_transport_names_the_fix,
+        test_windows_prefers_the_installer_cli,
+        test_doctor_warns_about_a_venv_launcher,
         test_receipt_reports_identity_never_assumes_it,
         test_timeout_kills_the_reviewer_tree,
         test_json_output_carries_route_receipts,

@@ -83,7 +83,7 @@ devpair doctor --live --requested-by user   # paid: probe each backend
 mkdir -p <hermes-home>/devpair
 cp devpair.py test_devpair.py <hermes-home>/devpair/
 # put a `devpair` shim on PATH that runs:  python3 <hermes-home>/devpair/devpair.py "$@"
-python3 <hermes-home>/devpair/test_devpair.py    # 586 checks, no network
+python3 <hermes-home>/devpair/test_devpair.py    # 605 checks, no network
 ```
 
 ### Configuration
@@ -460,14 +460,14 @@ the current git top-level, so another project never replays it.
 ## Development
 
 ```bash
-python3.11 test_devpair.py     # 104 regression tests (586 checks), no network required
+python3.11 test_devpair.py     # 110 regression tests (605 checks), no network required
 ```
 
 The suite pins every defect found during the tool's own development: self-review refusal, driver-identity precedence, session side-effects and atomicity, merge-base diff semantics, error propagation, truncation maths, the zero-tool launch and file transport, route receipts, process-tree timeouts, tri-state enforcement and per-attempt reservations, session containment/locking/redaction, and the coverage-aware gate. Run it after any change, with `DEVPAIR_HERMES_CMD` pointed at a stub so nothing can reach a real backend.
 
 ## Version & history
 
-Current: **1.2.5**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
+Current: **1.2.6**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per published change.
 
 ## License
 

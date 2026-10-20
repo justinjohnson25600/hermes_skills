@@ -1981,8 +1981,87 @@ def _hermes_command() -> list[str]:
                 tok = tok[1:-1]
             if tok:
                 parts.append(tok)
-        return parts or [shutil.which("hermes") or "hermes"]
-    return [shutil.which("hermes") or "hermes"]
+        return parts or [_default_hermes()]
+    return [_default_hermes()]
+
+
+def _is_scripts_launcher(path: str | None) -> bool:
+    """Windows: a pip/virtualenv console launcher (<prefix>\\Scripts\\hermes.exe)."""
+    if os.name != "nt" or not path:
+        return False
+    p = Path(path)
+    return p.parent.name.lower() == "scripts" and p.stem.lower() == "hermes"
+
+
+def _default_hermes() -> str:
+    """PATH first, so a deliberate shim keeps working. Windows exceptions, both
+    answered by the installer's CLI when it exists: PATH found nothing (MSYS
+    shells hand children a PATH which() cannot walk), or PATH found a Python
+    Scripts launcher, which can complete a turn yet relay nothing to stdout."""
+    found = shutil.which("hermes")
+    cli = _installer_cli()
+    if cli and (not found or _is_scripts_launcher(found)):
+        return cli
+    return found or "hermes"
+
+
+def _installer_cli() -> str | None:
+    """Windows only: the CLI the Hermes installer puts in <hermes-home>\\bin.
+
+    A virtualenv's Scripts\\hermes.exe can sit earlier on PATH and still run a
+    turn to completion (usage file written, reply saved in the session store)
+    while relaying NOTHING to stdout, which surfaced as "no output from
+    reviewer" with a finished, paid review thrown away. The installer's CLI is
+    the one Hermes itself puts on PATH; _default_hermes() uses it in place of a
+    Scripts launcher or a failed PATH lookup. A profile HERMES_HOME
+    (<root>/profiles/<name>) resolves to the root's bin. POSIX resolution is
+    unchanged; DEVPAIR_HERMES_CMD still wins."""
+    if os.name != "nt":
+        return None
+    home = _hermes_home()
+    roots = [home]
+    if home.parent.name.lower() == "profiles":
+        roots.append(home.parent.parent)
+    for root in roots:
+        cand = root / "bin" / "hermes.exe"
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def _launcher_warning(cmd: list[str]) -> str | None:
+    """Windows: a virtualenv launcher was chosen although the installer CLI exists."""
+    if os.name != "nt" or not cmd:
+        return None
+    cli = _installer_cli()
+    exe = Path(cmd[0])
+    if not cli or not _is_scripts_launcher(cmd[0]) or Path(cli) == exe:
+        return None
+    return (f"{exe} is a virtualenv launcher; on Windows these can complete a review yet "
+            f"print nothing. Prefer {cli} (unset DEVPAIR_HERMES_CMD, or point it there).")
+
+
+def _silent_backend_fix(cmd: list[str]) -> str:
+    cli = _installer_cli()
+    return (f"The hermes command in use ({cmd[0] if cmd else 'hermes'}) does not relay its "
+            "output: point DEVPAIR_HERMES_CMD at the Hermes CLI that prints `hermes -z` "
+            "replies (check: <that command> -z \"Reply OK\" prints OK)"
+            + (f", e.g. {cli}." if cli and (not cmd or Path(cmd[0]) != Path(cli)) else "."))
+
+
+def _silent_backend_message(transport: str, receipt: dict, cmd: list[str]) -> str:
+    """Exit 0 with nothing on stdout or stderr: say what happened and what to fix.
+    Keeps the historical prefix so anything matching on it still matches."""
+    if transport == "inline" and receipt.get("completed") is True \
+            and (receipt.get("output_tokens") or 0) > 0:
+        what = (f"the backend exited 0 and reported a completed turn "
+                f"({receipt['output_tokens']} output tokens) but printed nothing, and the "
+                "reply could not be recovered from the Hermes session store")
+    elif transport == "file":
+        what = "the backend exited 0 but printed nothing, not even stream-json events"
+    else:
+        what = "the backend exited 0 but printed nothing"
+    return f"no output from reviewer: {what}. {_silent_backend_fix(cmd)}"
 
 
 # ---------------------------------------------------------------------------
@@ -2125,13 +2204,8 @@ def _hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
-def _session_store_receipt(session_id: str | None) -> dict | None:
-    """What Hermes' own session store recorded for this run (read-only):
-    model, billing provider and base URL. The chat/stream-json transport has no
-    --usage-file, but it returns a session_id — so large-prompt reviews get the
-    same strength of identity evidence as inline ones, instead of 'unknown'."""
-    if not session_id or not re.match(r"^[A-Za-z0-9_.:-]{1,128}$", str(session_id)):
-        return None
+def _session_store_db() -> Path | None:
+    """Hermes' session store for this run's home (profile store first when named)."""
     db = _hermes_home() / "state.db"
     prof = os.environ.get("HERMES_PROFILE", "").strip()
     if prof and re.match(r"^[A-Za-z0-9_-]{1,64}$", prof):
@@ -2139,12 +2213,16 @@ def _session_store_receipt(session_id: str | None) -> dict | None:
         # the root (profiles/<p>/state.db) or already the profile dir itself.
         cand = _hermes_home() / "profiles" / prof / "state.db"
         db = cand if cand.is_file() else db
-    if not db.is_file():
+    return db if db.is_file() else None
+
+
+def _session_store_fetchone(sql: str, params: tuple):
+    """One row from the session store, read-only; None on any failure."""
+    db = _session_store_db()
+    if db is None:
         return None
     try:
         import sqlite3
-        q = "SELECT model, billing_provider, billing_base_url FROM sessions WHERE id = ?"
-        row = None
         for opener in ("ro", "query_only"):
             con = None
             try:
@@ -2155,8 +2233,7 @@ def _session_store_receipt(session_id: str | None) -> dict | None:
                     # open normally but forbid writes on this connection.
                     con = sqlite3.connect(str(db), timeout=5)
                     con.execute("PRAGMA query_only = 1")
-                row = con.execute(q, (str(session_id),)).fetchone()
-                break
+                return con.execute(sql, params).fetchone()
             except sqlite3.OperationalError:
                 continue
             finally:
@@ -2164,9 +2241,39 @@ def _session_store_receipt(session_id: str | None) -> dict | None:
                     con.close()
     except Exception:
         return None
+    return None
+
+
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def _session_store_receipt(session_id: str | None) -> dict | None:
+    """What Hermes' own session store recorded for this run (read-only):
+    model, billing provider and base URL. The chat/stream-json transport has no
+    --usage-file, but it returns a session_id — so large-prompt reviews get the
+    same strength of identity evidence as inline ones, instead of 'unknown'."""
+    if not session_id or not _SESSION_ID_RE.match(str(session_id)):
+        return None
+    row = _session_store_fetchone(
+        "SELECT model, billing_provider, billing_base_url FROM sessions WHERE id = ?",
+        (str(session_id),))
     if not row:
         return None
     return {"model": row[0], "provider": row[1], "base_url": row[2]}
+
+
+def _session_store_reply(session_id: str | None) -> str | None:
+    """The final assistant text Hermes stored for this session (read-only), or
+    None. Used only when the backend reported a completed turn with output
+    tokens yet printed nothing, so a finished review is not thrown away."""
+    if not session_id or not _SESSION_ID_RE.match(str(session_id)):
+        return None
+    row = _session_store_fetchone(
+        "SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' "
+        "AND content IS NOT NULL AND content != '' ORDER BY id DESC LIMIT 1",
+        (str(session_id),))
+    text = (row[0] if row else None) or ""
+    return text.strip() or None
 
 
 def _as_int(v) -> int | None:
@@ -2306,8 +2413,24 @@ def run_reviewer(reviewer: dict, prompt: str, timeout: int, verbose: bool) -> tu
         if rc != 0:
             detail = err_s or out_s or f"exit {rc} with no output"
             return done(False, f"exit {rc}: {detail[:400]}", "failed")
+        if not out_s and not err_s and transport == "inline" \
+                and receipt["completed"] is True and (receipt["output_tokens"] or 0) > 0:
+            # The turn finished and was paid for, but nothing reached stdout (a
+            # launcher that does not relay output). Hermes stored the reply under
+            # the session id its own usage report names: recover it, loudly.
+            sid = u.get("session_id") if isinstance(u, dict) else None
+            recovered = _session_store_reply(sid)
+            if recovered:
+                out_s = recovered
+                receipt["recovered_from"] = "session-store"
+                receipt["recovered_session"] = sid
+                receipt["warnings"].append(
+                    "the backend completed the turn but printed nothing; the reply was "
+                    f"recovered read-only from the Hermes session store (session {sid}). "
+                    + _silent_backend_fix(base))
         if not out_s or "agent failed" in out_s.lower()[:200]:
-            return done(False, out_s or err_s or "no output from reviewer", "failed")
+            return done(False, out_s or err_s or _silent_backend_message(transport, receipt, base),
+                        "failed")
         if receipt["completed"] is False:
             return done(False, "backend reported the turn as not completed: "
                                f"{receipt.get('turn_exit_reason') or 'no reason given'}", "failed")
@@ -2681,6 +2804,9 @@ def cmd_doctor(args) -> int:
     print(f"backend command: {' '.join(cmd)}" + ("" if found else "   <-- NOT FOUND"))
     if not found:
         rc = 1
+    lw = _launcher_warning(cmd)
+    if lw:
+        print(f"  WARNING: {lw}")
     print(f"reviewer toolset: {_reviewer_toolset()!r} (must resolve to ZERO tools; "
           "`-t \"\"` would load the full CLI toolset)")
     print(f"prompt transport: {_prompt_transport()}\n")
