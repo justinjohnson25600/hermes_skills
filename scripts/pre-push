@@ -24,7 +24,13 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     continue
   fi
   echo "pre-push: checking $local_ref ($local_sha)"
-  (cd "$wt" && "$py" check_consistency.py --no-fetch) || status=1
+  # Git exports GIT_DIR (an absolute path in a linked worktree) and friends to
+  # hooks. The gate runs skill test suites whose fixtures call git in temp
+  # dirs; with GIT_DIR inherited those calls commit into THIS repository,
+  # move its branches and set core.bare=true. Run the gate with no GIT_*
+  # variables, so git finds the checked-out worktree from the cwd alone.
+  (cd "$wt" && for v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done \
+    && "$py" check_consistency.py --no-fetch) || status=1
   git worktree remove --force "$wt"
   checked=$((checked + 1))
 done
