@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.6
+version: 1.2.8
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -156,6 +156,29 @@ Running the panel:
   artefact and in your report, and put it before the panel at the next gate
   rather than presenting it as endorsed.
 
+### Named fallback ladders and the closeout state
+
+When the user sets a ladder ("after N disagreements with X, try Y, then decide
+yourself"), the spend is bounded only if you bound it in writing:
+
+- **Count the ladder BEFORE the first paid call.** Record which rounds are
+  already consumed, including rounds that predate the instruction (by run id),
+  and what one "try" means: distinct original review scopes are distinct FIRST
+  rounds, not retries of one repair. Spend against the written budget, never a
+  fresh mental count.
+- **Resolve a named fallback model to an exact provider/model before launching
+  it.** A spoken name is not a route; if no configured provider/model matches
+  exactly, report and ask. Never launch a lookalike.
+- **Reviewer exhaustion waives nothing.** After the last allowed round YOU
+  adjudicate every outstanding claim against the source and real outputs:
+  reviewer agreement is not a vote that skips tests or gates, a verified serious
+  defect is still fixed, and absent runtime evidence is never reported as done.
+- **Persist the closeout state to a machine-readable file** whenever the loop
+  can outlive the context window: the user's authority verbatim, scope limits,
+  per-reviewer budgets consumed and remaining, exact model resolutions, and the
+  final-ruling rule. The next window reads the file instead of re-deriving the
+  budget, and cannot overspend by forgetting rounds it never saw.
+
 ## Setup
 
 Install with the repo's installer — it finds this machine's Hermes home, writes
@@ -174,6 +197,18 @@ Reviewer*). Do NOT edit the `REVIEWERS` dict in the source — config.json
 overrides it and survives upgrades.
 
 Requires: Hermes CLI on PATH, Python 3.8+, PyYAML, git (for diff modes).
+
+### Calling it from an agent terminal
+
+Bare `devpair` may not resolve there: the session PATH is assembled by the host
+and need not carry `<hermes-home>/bin`, and git-bash on Windows mangles PATH, so
+`devpair: command not found` does not mean it is missing. Call the installed
+shim by its full native path, `<hermes-home>/bin/devpair` (`devpair.cmd` on
+Windows; forward slashes under git-bash). The shim pins the interpreter and the
+CLI location, so the full path is also the deterministic form for scripts and
+background runs. Run static `devpair doctor` first: it validates config and
+roster with zero model calls and prints the driver/reviewer table you are about
+to spend against.
 
 ## What Each Mode Is For
 
@@ -196,6 +231,35 @@ asked for this run, `--requested-by user`. If they named a reviewer, add
 narrowest useful evidence — `--files` on the two files that matter beats
 `--diff` across forty. `--dry-run` shows who would review and how much context
 would be sent, and costs nothing.
+
+Before a named-model gated run, `--dry-run` with the exact intended `--driver`,
+`--with`, `--requested-by`, evidence and `--gate` options. Inspect the selected
+reviewer, evidence coverage, included files and packet size, then make the paid
+call separately. Do not chain the dry run and the paid call in one shell
+command: reading the dry run is the decision. A clean dry run is routing and
+coverage evidence, not a verdict.
+
+**`debug` emits analysis, not an approval verdict**, so `debug --gate` fails
+closed and is the wrong gate for a debugging session. An advisory debug result
+can carry `verdict: null` and a computed `gate_failed`. Judge whether the
+analysis completed from its response, route receipt and coverage; do not spend
+another paid call just to manufacture a verdict, and present it as diagnostic
+advice, not approval of later changes.
+
+### Reviewing a workflow, not just code
+
+When the ask is "review all your work / the whole procedure", pass every script
+in the pipeline with `--files` and put the architecture in `--ask`: what each
+script does, how they chain, what runs on a schedule, and the operational
+constraints (weak hardware, unattended runs). Add `--focus` naming the risk
+classes: access control, data loss, silent failure. A cross-model review at this
+level catches process defects no single-file review can see: identity resolved
+process-wide in a multi-user server, a rebuild that deletes the good index
+before the new one is validated, a queue that retries poison rows forever. In
+`--json` output the verdict is `verdict`, blocker count `blockers`, evidence
+`coverage`, and the full review text `response`. Verify each blocker against the
+code before implementing, then run the test suite, because fixes for one finding
+can regress another.
 
 ## Commands
 
@@ -317,7 +381,11 @@ fallback order. Entries missing from `order` still serve as fallbacks.
 2. **`followup` is how a review becomes a conversation** — it remembers what it
    said, notices what you silently dropped, and concedes when out-argued. But it
    is another paid call: run it when the user wants the loop closed, or offer it
-   ("want me to put these fixes back to the pair?"), not automatically.
+   ("want me to put these fixes back to the pair?"), not automatically. If a
+   requested `--gate` fails, stop before the gated phase and report the actual
+   exit, verdict and findings. Do not continue because the prose sounds
+   favourable, and do not issue `followup` or another paid critique on your own:
+   wait for the user's decision before spending again.
 3. **Disagreeing is legitimate.** Push back with reasoning. A pair you always
    obey is just a slow linter. But answer every point — it will notice silence.
 4. **Report its verdict to the user honestly**, including when it says STOP or
@@ -325,6 +393,41 @@ fallback order. Entries missing from `order` still serve as fallbacks.
    with your counter-argument and let the user decide.
 5. **`devpair reset` per feature.** Session memory is the point, but stale
    context from unrelated work pollutes the review.
+
+## Converging a multi-round review (followup loops)
+
+A reviewer that returns STOP after each fix is usually probing successive shapes
+of one defect class. Close the loop with evidence, not argument:
+
+1. **Encode every flip condition as a test before replying.** Build the
+   reviewer's exact counterexample (its "what would change my mind" sentence),
+   drive it through EVERY caller that shares the logic, and pair it with the
+   control it named (the genuinely valid case must still pass). Send the
+   followup with only the round's diff plus the new tests as `--files`, and
+   write the ask as one line per prior finding saying exactly how it was
+   applied. The reviewer then answers RESOLVED / NOT RESOLVED per item against
+   the diff instead of re-reviewing from scratch.
+2. **After two rounds on the same class, change the design, not the next
+   shape.** Patching one phrasing per round invites the next phrasing. Switch to
+   a fail-closed check independent of the logic being attacked (for example a
+   residual scan over whatever the matcher did NOT consume). A detector that
+   reuses the expander's grammar inherits its blind spots.
+3. **Declare the guarantee's scope in the followup ask.** State what the
+   safeguard promises and what is out of scope, so the reviewer judges a bounded
+   claim and can return PROCEED instead of hunting an unbounded one.
+4. **Avoid arbitrary thresholds in a fix.** A length floor or size cutoff added
+   to close one finding is the boundary the next round attacks; derive the
+   condition from the structure (the source's own separators, its own names).
+5. **Measure false positives after every tightening.** Run the check over the
+   real corpus it guards, compare finding counts before and after, and read
+   every new hit in context; fix alias or coverage gaps rather than loosening the
+   rule.
+6. **Keep one implementation.** When a gate and a lint share logic, make one
+   import the other's function and assert it in a test; parity that rests on two
+   copies plus a corpus will rightly be rejected.
+
+Before/after evidence and the finding classes worth pre-empting locally are in
+`references/field-notes.md`.
 
 ## Verdicts
 
@@ -344,21 +447,39 @@ condition and one falsifier); the reviewer treats your question as a hypothesis
 and challenges a wrong premise first. These are prompt-level Council crossovers
 — no extra calls.
 
+- **`review --gate` passes `SHIP AFTER FIXES` with exit 0.** Only `NEEDS WORK` /
+  `DO NOT SHIP` (or a `[BLOCKER]`) fail it. If the caller needs an unconditional
+  approval, read `verdict` from `--json` and treat anything but `SHIP` as a hold;
+  exit status alone has been mistaken for approval.
+- **One verdict value per review.** If your `--ask` requests extra verdict
+  sections, a `VERDICT: PROCEED` line beneath a `## REMAINING VERDICT` heading is
+  not parsed and the gate fails closed ("no parseable VERDICT line"). A heading
+  followed by the bare token, or a single inline `VERDICT: TOKEN`, parses.
+  Preserve a raw null result; do not relabel it green or buy an unchanged rerun
+  for punctuation.
+
 ## Pitfalls
 
-- **Read the route receipt, not the banner.** Every attempt records requested vs REPORTED provider/model: inline prompts from Hermes' `--usage-file`, large (file-transport) prompts from Hermes' own session store (`state.db`, read-only) by the returned session id. `identity` is `reported-match`, `reported-mismatch` (also shouted on stderr, even with `--json`) or `unknown` — never assumed. A match is what Hermes reported, not cryptographic proof of the upstream model. Do not present a mismatched or unknown route as the requested model's endorsement; if a strict requested-provider probe fails authentication, report the blocker rather than substituting another model silently.
+- **Read the route receipt, not the banner.** Every attempt records requested vs REPORTED provider/model: inline prompts from Hermes' `--usage-file`, large (file-transport) prompts from Hermes' own session store (`state.db`, read-only) by the returned session id. `identity` is `reported-match`, `reported-mismatch` (also shouted on stderr, even with `--json`) or `unknown` — never assumed. A match is what Hermes reported, not cryptographic proof of the upstream model. Do not present a mismatched or unknown route as the requested model's endorsement; if a strict requested-provider probe fails authentication, report the blocker rather than substituting another model silently. In `--json`, find the receipt by content (the object carrying `identity` and `reported_model`): `review` and `followup` results nest it differently, so a missing top-level `receipt` key does not mean the route went unverified. A `PROBE_OK` or a banner never proves the route: Hermes can fall back to another model and still answer (see `references/field-notes.md` for isolated probes).
+- **A profile in `DEVPAIR_HERMES_CMD` can hide the route receipt.** With `-p <profile>` only in the command prefix, the session lands in that profile's store while devpair reads the default home's, so the receipt says `identity: unknown`. Also set `HERMES_PROFILE=<profile>` for the devpair call.
 - **User-requested reasoning effort is per invocation.** Confirm the installed Hermes CLI and target adapter support the requested level, then append e.g. `--reasoning max` to the native Hermes command prefix in `DEVPAIR_HERMES_CMD`; retain `--driver`, `--with` and `--requested-by user` on devpair. Do not change persistent model/config defaults for a review. `--timeout`/`--budget` limit wall-clock, not reasoning effort; elapsed time or token totals do not prove a named model ran at max.
 - **Large prompts travel by file, not argv.** Past ~30k chars on Windows (CreateProcess caps a command line at 32,767) the prompt goes through a private temp file to `hermes chat -Q --query-file --format stream-json`; `DEVPAIR_PROMPT_TRANSPORT=inline|file|auto` overrides. A forced-inline oversize prompt is reported as "too large", never as "CLI not found". If a reviewer's answer arrives but the call never returns (observed under a profile with host-isolated plugins and MCP servers), set `DEVPAIR_PROMPT_TRANSPORT=file` and repeat the dry run: the `--query-file` path exits cleanly there.
-- **A review that finishes but prints nothing (Windows).** A virtualenv's `Scripts\hermes.exe` listed on PATH before `<hermes-home>\bin\hermes.exe` can complete the turn (usage file written, reply saved in `state.db`) yet relay nothing to stdout. Since 1.2.6 devpair uses the installer's CLI in place of a `Scripts` launcher or a failed PATH lookup, recovers a completed silent turn read-only from the session store (receipt `recovered_from: session-store`, plus a warning), and `devpair doctor` flags a launcher override. Test a candidate command with `<cmd> -z "Reply OK"`: it must print OK.
-- **Provider rate-limiting masquerades as a timeout.** An upstream HTTP 429 exhausts the CLI's 3 retries slowly and presents as "reviewer timed out after Ns". Probe cheaply (`hermes -z "Reply PROBE_OK" -m <model> --provider <p> -t context_engine --ignore-rules` — never `-t ""`, which loads every tool); if the probe fails fast with a usage limit, wait for the reset time named in the failure text and probe again. Spend the paid review only once a probe answers: a review sent into a live limit still burns a capped attempt plus minutes of timeout. A timeout kills the whole reviewer process tree.
+- **A review that finishes but prints nothing (Windows).** A virtualenv's `Scripts\hermes.exe` listed on PATH before `<hermes-home>\bin\hermes.exe` can complete the turn (usage file written, reply saved in `state.db`) yet relay nothing to stdout. Since 1.2.6 devpair uses the installer's CLI in place of a `Scripts` launcher or a failed PATH lookup, recovers a completed silent turn read-only from the session store (receipt `recovered_from: session-store`, plus a warning), and `devpair doctor` flags a launcher override. Test a candidate command with `<cmd> -z "Reply OK"`: it must print OK. Empty stdout is a failure whatever the exit code.
+- **Provider rate-limiting masquerades as a timeout.** An upstream HTTP 429 exhausts the CLI's 3 retries slowly and presents as "reviewer timed out after Ns". Probe cheaply (`hermes -z "Reply PROBE_OK" -m <model> --provider <p> -t context_engine --ignore-rules` — never `-t ""`, which loads every tool); if the probe fails fast with a usage limit, wait for the reset time named in the failure text and probe again. Spend the paid review only once a probe answers: a review sent into a live limit still burns a capped attempt plus minutes of timeout. A timeout kills the whole reviewer process tree. A first attempt that burns its whole timeout with no output, on a complete packet with a probe that answers, is a wedged generation: rerun the identical packet once; two full-timeout stalls in a row mean the task is too big, so split it.
 - **Under an MSYS/git-bash terminal `shutil.which('hermes')` fails for the child python** (POSIX-mangled PATH) — every review dies as "CLI not found" while `devpair doctor` (direct API probes) stays green. Since 1.2.6 a failed lookup falls back to `<hermes-home>\bin\hermes.exe` when it exists; otherwise set `DEVPAIR_HERMES_CMD` to the NATIVE absolute path of hermes.exe; bash-exported env can also vanish through extra spawn layers, so the durable fix is a self-setting shim (`if not defined DEVPAIR_HERMES_CMD set "DEVPAIR_HERMES_CMD=%~dp0hermes.exe"` in devpair.cmd).
 - **Reviewing with no evidence** produces generic advice. Attach the diff or files.
 - **Same-family review** — heed the warning, pass `--reviewer` or fix `--driver`.
-- **Evidence is size-capped per section, so check sizes before a paid run.** Diffs truncate at ~60k chars (the manifest records it and `--gate` will refuse an approval on it). Review them in slices: `--diff-ref` takes no pathspec, so slice by committing per-area changes or by cloning the repo and restoring one file onto the base commit. A `--plan` is capped at 30,000 chars and each `--files` entry at 24,000 including the line numbers devpair adds (90,000 in total). Overflow is cut from the MIDDLE and the run carries on: the packet gets a truncation marker, the reviewer is told what is missing, `--json` reports `coverage: partial` with `coverage_gaps`, and stderr says `EVIDENCE PARTIAL`. Nothing fails without `--gate`, so a caller that ignores both gets a review of a document with a hole in it. For a long plan or brief, split it at section boundaries into consecutive parts of at most ~18k chars, pass them all with `--files`, and make `--plan` a one-line pointer ("one document in N consecutive files; read them in order"). Confirm with `--dry-run` (free) that every part goes in full, then check that `coverage` is `complete` in the result. Large packets are slow too: ~55k chars took 4–6 minutes per frontier reviewer, close to the 420 s default, so pass `--timeout 900`.
+- **Evidence is size-capped per section, so check sizes before a paid run.** Diffs truncate at ~60k chars (the manifest records it and `--gate` will refuse an approval on it). Review them in slices: `--diff-ref` takes no pathspec, so slice by committing per-area changes or by cloning the repo and restoring one file onto the base commit. A `--plan` is capped at 30,000 chars and each `--files` entry at 24,000 including the line numbers devpair adds (90,000 in total). Overflow is cut from the MIDDLE and the run carries on: the packet gets a truncation marker, the reviewer is told what is missing, `--json` reports `coverage: partial` with `coverage_gaps`, and stderr says `EVIDENCE PARTIAL`. Nothing fails without `--gate`, so a caller that ignores both gets a review of a document with a hole in it. For a long plan or brief, split it at section boundaries into consecutive parts of at most ~18k chars, pass them all with `--files`, and make `--plan` a one-line pointer ("one document in N consecutive files; read them in order"). Confirm with `--dry-run` (free) that every part goes in full, then check that `coverage` is `complete` in the result. Large packets are slow too: ~55k chars took 4–6 minutes per frontier reviewer, close to the 420 s default, so pass `--timeout 900` (near the 90k cap, `--timeout 1800`). Budgeting arithmetic and splitting several coupled documents: `references/field-notes.md`.
+- **Evidence kept outside the working tree draws false citation flags.** The `UNVERIFIED CLAIMS` check resolves cited paths against the current tree, so a file that WAS sent from elsewhere (a scratch folder, a staging copy) can be reported as missing. Re-check the cited lines in the file actually sent before discarding a review on that flag, and keep the flag rather than editing the receipt. Run from the tree that holds the evidence to avoid it.
+- **Redaction can rewrite ordinary code.** Assigned-secret redaction also replaces lines such as `run(secret=secret)` and `token = (deadline, proc)`, so the reviewer can report a defect that is not in your source. Watch the redaction count and anchor findings against the real file (details in `references/field-notes.md`).
+- **A fixed count of authorised calls does not authorise the loop.** "Authorise both calls" covers the two named runs; sending your fixes back for re-verification is a NEW paid call and needs its own ask. If an extra call slips out, disclose it in the same report (session, run id, token estimate) and put retrospective approval on the user's decision list; never fold it silently into "verification".
 - **A short verdict-less reply is a failed attempt**, not a review (a model expecting tools often answers "I'll check X first…"); devpair falls through to the next backend. Long verdict-less reviews are kept and fail the gate closed.
 - **Treating it as an oracle.** It has no access to your terminal, tests, or
   runtime — it reasons from what you pasted. Verify its claims before acting on
-  them, especially file:line references.
+  them, especially file:line references. A packet of planning documents alone
+  (no source) forces it to reconstruct code from memory: it cites `file:line` it
+  never saw. The harness flags those as unverified, and each still needs checking
+  against the real file before acting (they may well be right).
 - **First call after idle** can take 60-90s. That is the model thinking, not a hang.
 - **Small local reasoning models are slow reviewers.** A 9B-class local model
   emits a long reasoning trace before content — even a trivial probe takes
@@ -376,6 +497,8 @@ and challenges a wrong premise first. These are prompt-level Council crossovers
 - **Watch for regressions from its own suggestions.** One of its good ideas was
   implemented in a way that reintroduced a side-effect it had itself flagged a
   turn earlier. Run the test suite after taking its advice.
+- **More field notes** (route probes, credential pools, packet budgeting, hashing,
+  Windows recovery, multi-round evidence): `references/field-notes.md`.
 
 ## Safety Behaviours You Should Know
 
@@ -390,6 +513,14 @@ and challenges a wrong premise first. These are prompt-level Council crossovers
   count and says whether it came from the evidence or from your question. This is
   defence in depth, not a guarantee — if the repo is full of live credentials,
   check the evidence before sending.
+- **Redaction does not know what is PROPRIETARY.** `redact_secrets()` catches
+  credential-shaped values only; licensed source, client material or a reference
+  corpus you must not transmit crosses untouched. If such material is in or
+  beside the evidence, build a normalised corpus of its lines and make your
+  packet step REFUSE to send when any outgoing line (evidence, digest, even the
+  `--plan`/`--ask` text) matches one after whitespace normalisation, testing only
+  lines long enough that a match means copying. Re-run the check on every
+  rebuild, not once.
 - **Independence fails closed.** If the driver's family can't be identified from
   the model name, it is inferred from the provider; if it still can't, devpair
   REFUSES rather than offering an unprovable guarantee. Pass `--driver` to fix.
@@ -477,6 +608,8 @@ with a stubbed backend). No network required. Run after any change; set
 
 - `devpair.py` — implementation
 - `test_devpair.py` — 110 regression tests (605 checks)
+- `references/field-notes.md` — field-tested notes behind the Pitfalls
+- `references/offline-assessment.md` — inspecting the install without paid calls
 - `devpair` — reference CLI wrapper. The installer generates its own shim
   (`devpair.cmd` on Windows, an interpreter-chain bash script on POSIX), so
   this file is only needed for a manual install.

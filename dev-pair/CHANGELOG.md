@@ -2,6 +2,46 @@
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 
+## 1.2.8 — 2026-10-20
+
+Documentation only: no code or behaviour change (`devpair.py` and
+`test_devpair.py` are byte-identical to 1.2.6). Folds in guidance that installed
+copies of the skill had learned in real use but that was never published, so
+those copies can follow releases again. Version 1.2.7 is skipped because an
+unpublished installed copy already carried that label.
+
+- **SKILL.md:** named fallback ladders and the closeout state; calling the
+  shim by full path from an agent terminal; dry-run before a named-model gated
+  run; `debug` has no approval verdict; reviewing a workflow rather than one
+  file; stop when a requested gate fails; a new *Converging a multi-round
+  review* section; `--gate` passes `SHIP AFTER FIXES`; one verdict value per
+  review; finding the route receipt in `--json`; `HERMES_PROFILE` with a
+  profile in `DEVPAIR_HERMES_CMD`; wedged-attempt reruns; false citation flags
+  for evidence outside the tree; authorised call counts versus loops; packets
+  of planning documents only; proprietary material is not redacted.
+- **New `references/field-notes.md`:** isolated route probes, silent fallback,
+  exhausted credential pools, custom-provider receipts, forbidding fallback for
+  one run, packet budgeting and splitting coupled documents,
+  dependency-complete evidence, scrub collisions, git-object packet builders,
+  byte-exact packet archives, LF/CRLF hashes, UTF-8 readers on Windows,
+  effective context window and compaction, manual session-store recovery,
+  before/after evidence and finding classes to pre-empt.
+
+Known issues documented here, not yet fixed in code (each needs its own
+release with tests):
+
+- Assigned-secret redaction also rewrites ordinary code such as
+  `run(secret=secret)`, so reviewers can see broken evidence.
+- A `VERDICT: TOKEN` line beneath a separate verdict heading is not parsed;
+  the gate fails closed.
+- The route receipt reads a profile's session store only when
+  `HERMES_PROFILE` is set, not when the profile is named with `-p` inside
+  `DEVPAIR_HERMES_CMD`.
+- The suite's git fixtures inherit `GIT_DIR`. Run under a git hook from a
+  linked worktree, they committed into the real repository and set
+  `core.bare=true`. The repo's pre-push hook now strips `GIT_*` before running
+  the gate; the fixtures themselves still need to.
+
 ## 1.2.6 — 2026-10-20
 
 A finished review is no longer thrown away when the Hermes launcher prints

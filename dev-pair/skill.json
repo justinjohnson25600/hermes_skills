@@ -1,6 +1,6 @@
 {
   "name": "dev-pair",
-  "version": "1.2.6",
+  "version": "1.2.8",
   "category": "software-development",
   "description": "Second-opinion critique/review from a different LLM.",
   "state_dir": "devpair",
@@ -23,6 +23,7 @@
   },
   "next_step": "run `devpair doctor` (static, free) to check config and roster, then `devpair review --diff --driver PROVIDER/MODEL --requested-by user`",
   "skill_files": [
+    "references/field-notes.md",
     "references/offline-assessment.md"
   ]
 }
