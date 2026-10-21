@@ -1,0 +1,12 @@
+{
+    "name": "quality-guard",
+    "version": "0.1.0",
+    "category": "reviewer",
+    "description": "Pre-delivery verification gate: mandatory verification actions before client-ready, production-ready or publication-ready output.",
+    "needs_reviewer_config": false,
+    "skill_files": [
+        "README.md",
+        "references/verification-actions.md"
+    ],
+    "next_step": "ask for it: \"apply the quality guardrail to this\""
+}

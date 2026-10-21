@@ -7,6 +7,7 @@
     "llm-council",
     "make-interfaces-feel-better",
     "pdf-creator",
+    "quality-guard",
     "senior-dev-prompt",
     "verify-results"
 ]
