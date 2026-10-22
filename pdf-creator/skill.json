@@ -1,10 +1,14 @@
 {
     "name": "pdf-creator",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "category": "software-development",
     "description": "Markdown to print-ready PDF with CJK fonts, themes, visual self-check.",
     "upstream": "daymade/claude-code-skills",
     "upstream_pin": "6b2096236262bc5b43ba5c0b9ec25084addef0fd",
+    "upstream_path": "daymade-docs/pdf-creator",
+    "vendor_exclude": {
+        "scripts/tests/": "upstream's own pytest suite for md_to_pdf.py; Hermes never runs it, and it needs pytest, weasyprint and pdfplumber"
+    },
     "license": "MIT",
     "platforms": [
         "macos",
@@ -15,6 +19,11 @@
         "scripts/batch_convert.py",
         "scripts/check_table_borders.py",
         "scripts/md_to_pdf.py",
+        "themes/cjk-auto.css",
+        "themes/default.css",
+        "themes/mobile.css",
+        "themes/warm-terra-menu.css",
+        "themes/warm-terra.css",
         "UPSTREAM.md"
     ],
     "next_step": "Loads automatically when a matching task appears."

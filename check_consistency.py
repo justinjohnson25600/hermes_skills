@@ -31,8 +31,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -276,6 +278,109 @@ def _git_tracked_files(skill: str) -> set[str]:
             if line.startswith(prefix)}
 
 
+def _upstream_tree(repo: str, sha: str) -> tuple[dict | None, str]:
+    """The upstream git tree at a pinned commit: from the local cache, else gh, else GitHub's API.
+
+    A tree at a full commit SHA never changes, so a complete one is cached after the first read;
+    later runs (every push) then need no network and cannot hit the API rate limit.
+    """
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "hermes_skills" / "upstream-trees"
+    cached = cache / f"{repo.replace('/', '__')}@{sha}.json"
+    try:
+        tree = json.loads(cached.read_text(encoding="utf-8"))
+        if tree.get("sha") == sha and not tree.get("truncated") and tree.get("tree"):
+            return tree, ""
+    except (OSError, ValueError, AttributeError):
+        pass
+    tree, why = _fetch_upstream_tree(repo, sha)
+    if tree and tree.get("sha") == sha and not tree.get("truncated"):
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            cached.write_text(json.dumps({"sha": sha, "truncated": False, "tree": [
+                {"path": t["path"], "type": t["type"]} for t in tree.get("tree", [])]}), encoding="utf-8")
+        except OSError:
+            pass  # an unwritable cache only costs the next run a fetch
+    return tree, why
+
+
+def _fetch_upstream_tree(repo: str, sha: str) -> tuple[dict | None, str]:
+    why = ""
+    if shutil.which("gh"):
+        r = subprocess.run(["gh", "api", f"repos/{repo}/git/trees/{sha}?recursive=1"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            try:
+                return json.loads(r.stdout), ""
+            except ValueError:
+                why = "gh returned non-JSON"
+        else:
+            why = (r.stderr or "").strip()[:120] or f"gh exit {r.returncode}"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "hermes_skills-check_consistency"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{repo}/git/trees/{sha}?recursive=1",
+                                     headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8")), ""
+    except Exception as e:  # network, HTTP or JSON: the caller fails the skill as unverified
+        return None, "; ".join(x for x in (why, f"{type(e).__name__}: {e}"[:160]) if x)
+
+
+def check_vendored_complete(skill: str) -> None:
+    """Every file of a vendored skill's upstream dir at the pin ships, or is excluded with a reason.
+
+    install.py ships SKILL.md plus skill.json skill_files only, and check_manifest_covers_code
+    looks at code files only, so a vendored skill's non-code support files (themes, references)
+    could be left out of what ships with every check green. pdf-creator 0.1.0 reached every node
+    without themes/*.css (md_to_pdf.py exits "Theme 'default' not found") and agent-reach 0.1.0
+    without the references/*.md its SKILL.md routes to.
+    Runs under --no-fetch too: that flag skips the origin comparison, and the pre-push hook passes
+    it, so skipping here would leave this check out of every push.
+    Curated imports that declare vendored_library_dirs keep their own refresh procedure.
+    """
+    sj = json.loads((ROOT / skill / "skill.json").read_text(encoding="utf-8"))
+    if "upstream_pin" not in sj or sj.get("vendored_library_dirs"):
+        return
+    if "upstream_path" not in sj:
+        fail(f"[{skill}] vendored (upstream_pin) but skill.json has no upstream_path, so the gate "
+             f"cannot compare what ships with upstream — set it ('' for the repo root)")
+        return
+    excl = sj.get("vendor_exclude", {})
+    if not isinstance(excl, dict) or not all(isinstance(w, str) and w.strip() for w in excl.values()):
+        fail(f"[{skill}] vendor_exclude must map each upstream path to a non-empty reason")
+        return
+    tree, why = _upstream_tree(sj["upstream"], sj["upstream_pin"])
+    if not tree or tree.get("truncated"):
+        fail(f"[{skill}] could not read the whole upstream tree {sj['upstream']}@{sj['upstream_pin'][:8]} "
+             f"({why or 'truncated'}) — vendoring is unverified")
+        return
+    root = sj["upstream_path"].strip("/")
+    pre = root + "/" if root else ""
+    upstream = {t["path"][len(pre):] for t in tree.get("tree", [])
+                if t.get("type") == "blob" and t["path"].startswith(pre)}
+    if "SKILL.md" not in upstream:
+        fail(f"[{skill}] upstream_path '{root}' holds no SKILL.md at {sj['upstream_pin'][:8]} — wrong path")
+        return
+
+    def excluded(path: str) -> bool:
+        return any(path == e or (e.endswith("/") and path.startswith(e)) for e in excl)
+
+    shipped = {"SKILL.md"} | set(sj.get("skill_files", []))
+    missing = sorted(p for p in upstream if p not in shipped and not excluded(p))
+    if missing:
+        fail(f"[{skill}] {len(missing)} upstream file(s) at {sj['upstream_pin'][:8]} never ship (not in "
+             f"skill_files, not in vendor_exclude): {', '.join(missing)} — vendor and declare them, "
+             f"or exclude each with a reason")
+    absent = sorted(f for f in sj.get("skill_files", []) if not (ROOT / skill / f).is_file())
+    if absent:
+        fail(f"[{skill}] skill_files declares file(s) missing from the repo: {', '.join(absent)}")
+    stale = sorted(e for e in excl if not any(p == e or (e.endswith("/") and p.startswith(e)) for p in upstream))
+    if stale:
+        note(f"[{skill}] vendor_exclude entries match no upstream file: {', '.join(stale)}")
+
+
 IGNORED_FILE_NAMES = {"__pycache__", ".DS_Store"}
 
 
@@ -465,6 +570,7 @@ def main() -> int:
         check_platforms(s)
         check_live_install(s, a.fix)
         check_manifest_covers_code(s)
+        check_vendored_complete(s)
         try:
             sj_live = json.loads((ROOT / s / "skill.json").read_text(encoding="utf-8"))
         except Exception:

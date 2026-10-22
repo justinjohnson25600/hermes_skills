@@ -15,8 +15,8 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 | [quality-guard](quality-guard/) | 0.1.0 | Pre-delivery verification gate: mandatory verification actions (execute code, fetch docs, search facts) before client-ready / production-ready / publication-ready output, proven by a terse verification footer |
 | [caveman](caveman/) | 0.1.0 | Terse output mode that cuts token spend while keeping every fact (vendored: JuliusBrussee/caveman) |
 | [make-interfaces-feel-better](make-interfaces-feel-better/) | 0.1.1 | UI polish review: animations, typography, shadows, hit areas (vendored: jakubkrehel/make-interfaces-feel-better) |
-| [pdf-creator](pdf-creator/) | 0.1.0 | Markdown to print-ready PDF with CJK fonts, themes and visual self-check (vendored: daymade/claude-code-skills) |
-| [agent-reach](agent-reach/) | 0.1.0 | Routes web/social research to the right CLI; includes channel doctor (vendored: Panniantong/Agent-Reach) |
+| [pdf-creator](pdf-creator/) | 0.1.1 | Markdown to print-ready PDF with CJK fonts, themes and visual self-check (vendored: daymade/claude-code-skills) |
+| [agent-reach](agent-reach/) | 0.1.1 | Routes web/social research to the right CLI; includes channel doctor (vendored: Panniantong/Agent-Reach) |
 | [anthropic-skills-index](anthropic-skills-index/) | 0.1.0 | 15 Apache-2.0 Anthropic skills vendored + install pointers for the proprietary doc suite |
 | [cybersecurity-skills-index](cybersecurity-skills-index/) | 0.1.0 | On-demand index over 818 cybersecurity procedure skills — prompt-safe (1 row, library on disk) |
 
@@ -162,10 +162,18 @@ shim itself falls back to the default home's copy if its target is later deleted
 | `SKILL.md` | yes | The skill itself — what the agent loads |
 | `CHANGELOG.md` | yes | Semver history, newest first |
 | `README.md` | for non-trivial skills | Human-facing docs |
-| `skill.json` | only if the skill ships code | Install manifest: files, entrypoint, CLI name, verify command |
+| `skill.json` | if the skill ships code or support files | Install manifest: files, entrypoint, CLI name, verify command |
 
 Markdown-only skills need no `skill.json` — the installer just places
 `SKILL.md` and stops.
+
+**Vendored skills** (an upstream skill copied at a pinned commit) record `upstream`, `upstream_pin`
+and `upstream_path` (the skill's directory in the upstream repo, `""` for its root) in `skill.json`.
+Every file in that upstream directory at the pin must either ship, listed in `skill_files` beside
+`SKILL.md`, or appear in `vendor_exclude` with a reason, for example
+`"agents/openai.yaml": "OpenAI Codex agent config; Hermes does not read it"`. `install.py` ships
+declared files only, so an undeclared theme or reference file reaches no node; `check_consistency.py`
+compares the two against the upstream tree and fails on any file that does neither.
 
 ## Versioning
 

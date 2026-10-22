@@ -5,6 +5,11 @@
     "description": "Terse caveman voice that cuts output tokens while keeping all facts.",
     "upstream": "JuliusBrussee/caveman",
     "upstream_pin": "d262ab3882952a59312ff3537cd86d894523c5ab",
+    "upstream_path": "plugins/caveman/skills/caveman",
+    "vendor_exclude": {
+        "agents/openai.yaml": "OpenAI Codex agent config; Hermes does not read it",
+        "assets/": "logo images for upstream's README; the skill does not use them"
+    },
     "license": "Apache-2.0",
     "platforms": [
         "macos",

@@ -1,7 +1,7 @@
 ---
 name: agent-reach
 description: Routes web/social research to the right CLI and runs the agent-reach doctor.
-version: 0.1.0
+version: 0.1.1
 author: Justin Johnson (justinjohnson25600)
 license: MIT
 platforms: [macos, linux, windows]

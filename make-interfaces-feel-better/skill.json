@@ -5,6 +5,10 @@
     "description": "UI polish principles: animations, typography, shadows, hover states.",
     "upstream": "jakubkrehel/make-interfaces-feel-better",
     "upstream_pin": "35545ea1512ad59fa463e6b1f95ca9c052981fe6",
+    "upstream_path": "skills/make-interfaces-feel-better",
+    "vendor_exclude": {
+        "agents/openai.yaml": "OpenAI Codex agent config; Hermes does not read it"
+    },
     "license": "MIT",
     "platforms": [
         "macos",

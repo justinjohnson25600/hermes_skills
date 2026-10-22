@@ -1,10 +1,14 @@
 {
     "name": "agent-reach",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "category": "software-development",
     "description": "Routes web/social research to the right CLI and runs the agent-reach doctor.",
     "upstream": "Panniantong/Agent-Reach",
     "upstream_pin": "94f06c1969dfc1834001269d79d3ad0972d9dee6",
+    "upstream_path": "agent_reach/skill",
+    "vendor_exclude": {
+        "SKILL_en.md": "upstream's alternative English SKILL.md; the vendored SKILL.md is upstream's SKILL.md verbatim"
+    },
     "license": "MIT",
     "platforms": [
         "macos",
@@ -12,6 +16,13 @@
         "windows"
     ],
     "skill_files": [
+        "references/career.md",
+        "references/dev.md",
+        "references/finance.md",
+        "references/search.md",
+        "references/social.md",
+        "references/video.md",
+        "references/web.md",
         "UPSTREAM.md"
     ],
     "next_step": "Loads automatically when a matching task appears."
