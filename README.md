@@ -15,7 +15,7 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 | [quality-guard](quality-guard/) | 0.1.0 | Pre-delivery verification gate: mandatory verification actions (execute code, fetch docs, search facts) before client-ready / production-ready / publication-ready output, proven by a terse verification footer |
 | [caveman](caveman/) | 0.1.0 | Terse output mode that cuts token spend while keeping every fact (vendored: JuliusBrussee/caveman) |
 | [make-interfaces-feel-better](make-interfaces-feel-better/) | 0.1.1 | UI polish review: animations, typography, shadows, hit areas (vendored: jakubkrehel/make-interfaces-feel-better) |
-| [pdf-creator](pdf-creator/) | 0.1.1 | Markdown to print-ready PDF with CJK fonts, themes and visual self-check (vendored: daymade/claude-code-skills) |
+| [pdf-creator](pdf-creator/) | 0.1.2 | Markdown to print-ready PDF with CJK fonts, themes and visual self-check (vendored: daymade/claude-code-skills) |
 | [agent-reach](agent-reach/) | 0.1.1 | Routes web/social research to the right CLI; includes channel doctor (vendored: Panniantong/Agent-Reach) |
 | [anthropic-skills-index](anthropic-skills-index/) | 0.1.0 | 15 Apache-2.0 Anthropic skills vendored + install pointers for the proprietary doc suite |
 | [cybersecurity-skills-index](cybersecurity-skills-index/) | 0.1.0 | On-demand index over 818 cybersecurity procedure skills — prompt-safe (1 row, library on disk) |

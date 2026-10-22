@@ -1,7 +1,7 @@
 ---
 name: pdf-creator
 description: Markdown to print-ready PDF with CJK fonts, themes, visual self-check.
-version: 0.1.1
+version: 0.1.2
 author: Justin Johnson (justinjohnson25600)
 license: MIT
 platforms: [macos, linux, windows]
