@@ -1,7 +1,7 @@
 ---
 name: quality-guard
-description: "Pre-delivery verification gate. Converts 'check this' into mandatory verification ACTIONS — execute code before presenting it, fetch docs before citing API behaviour, search before stating current facts. ALWAYS trigger when the user says 'apply the quality guardrail', 'run the pre-answer validation', 'check this before answering', 'use the hallucination guardrail', 'make this production-ready', 'publication-ready', or 'client-ready', or when producing any Tier 3 deliverable: code for deployment, client-facing documents, published clinical/scientific content, instructions others will follow, or compliance-sensitive marketing claims (routine marketing copy is Tier 2). Do NOT trigger for internal drafts, brainstorms, or exploratory chat. Do NOT trigger where another domain gate owns quality (e.g. a domain-specific report-completeness contract) or for post-hoc critique of finished work (verify-results)."
-version: 0.1.0
+description: "Verify relied-upon work before delivery; record limits."
+version: 0.1.1
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -11,77 +11,82 @@ metadata:
     related_skills: [verify-results, dev-pair]
 ---
 
-# Quality Guard — Pre-Delivery Verification Gate
+# Quality Guard — Pre-Delivery Verification
 
-## Purpose
+Require real checks before relied-upon work leaves the agent. The procedure is a safety discipline, not an automatic send blocker or truth detector. The optional helper validates records and bounded execution evidence; it never decides semantic readiness.
 
-This skill exists because "be accurate" changes nothing — the model already tries to be accurate. What reduces hallucination is *doing something*: running the code, fetching the document, searching for the fact. This skill mandates those actions before a deliverable goes out, and makes the result observable via a short verification footer.
+## When to Use
 
-It is a gate, not a checklist. A deliverable that fails the gate is never presented as client-ready, production-ready, or publication-ready.
+- The user asks to apply the quality guardrail, check before answering, or make work client-ready, publication-ready or production-ready.
+- Producing deployed code, client documents, instructions others follow, clinical/scientific or compliance-sensitive claims.
+- Do not run the full procedure for internal drafts or brainstorming. Use `verify-results` for post-hoc critique of finished work.
+- A domain gate replaces only checks whose equivalent coverage is explicit. Retain uncovered factual, delivery and safety checks; avoid duplicating covered work.
 
-## Lane demarcation
+## Prerequisites
 
-Two skills share one vocabulary and split the timeline:
+Use the capabilities actually enabled this session: `terminal`, `read_file`, retrieval/research tools or appropriate equivalents. A named connector is not mandatory. Prefer authoritative documentation for the installed or pinned version; missing access means an explicit limit, never a remembered signature presented as fetched documentation.
 
-- **quality-guard (this skill)** runs *before* output exists — it shapes and verifies the deliverable during production.
-- **verify-results** runs *after* output exists — a structured critique of work already on the table.
-
-If the user asks for a critique, review, or audit of something already written, hand off to verify-results. If a domain-specific quality gate is in flight (e.g. a report-completeness contract for a specific workflow), stand down entirely — that gate is the authority there, and double-gating wastes tokens and time.
+The helper needs Python 3.8+ and no packages, credentials, model calls or background services. Resolve a working interpreter for the target system. Execution through `run` is optional and requires an explicitly approved command in the intended sandbox; this skill grants no new permissions.
 
 ## Risk tiers
 
-Verification depth scales with what the output touches. Decide the tier first; it determines everything downstream.
+| Tier | Examples | Requirement |
+|---|---|---|
+| 1 — Internal | exploration, brainstorming, drafts | No mandatory record. Do not imply unperformed verification. |
+| 2 — Published, low-stakes | routine marketing or social copy | Check factual claims; remove unsupported claims or make limits explicit. Include a record if uncertainty remains. |
+| 3 — Relied upon | deployed code, client work, consequential instructions | Full relevant checks and an operator-facing record. Hold actions with unresolved required checks. |
 
-| Tier | Examples | Obligation |
-|------|----------|------------|
-| **1 — Internal** | drafts, brainstorms, exploration, "what do you think about…" | Skill does not run. No footer. |
-| **2 — Published, low-stakes** | social captions, blog posts, routine marketing copy, image prompts | Claims check only: every factual claim verified or removed. Footer optional, include if anything was left unverified. Compliance-sensitive claims within Tier 2 content escalate to Tier 3 per the mixed-tier rule (see reference). |
-| **3 — Relied upon** | deployed code, client documents, clinical/scientific content, instructions others will follow, compliance-sensitive claims | Full verification actions mandatory. Footer mandatory. Gate applies. |
+Apply the strictest tier to the claims it governs, not indiscriminately to every sentence.
 
-## Verification actions
+## Procedure
 
-The core of the skill. For each claim type in the deliverable, take the action — do not substitute a mental check for a real one.
+1. **Define acceptance.** Name the required checks, final artefacts and relied-upon claims before checking. Distinguish source tests, built/installed bytes, native-host behaviour and live external effects. One layer is not proof of another.
+2. **Take real verification actions.** Execute the actual CLI/artefact, its help or dry-run and the applicable tests/linter. For APIs fetch the right version's authoritative docs; for current facts search; for clinical/scientific claims use appropriate primary research. Re-read supplied material for faithful quotations, and independently verify external factual claims: supplied material is not automatically factual truth. Calculate rather than invent figures.
+3. **Bound destructive actions independently.** Obtain required permission, preserve a backup and independently check ownership and blast radius. A tool's own dry-run can repeat its own classification error. Unknown ownership is not proof that something is orphaned or safe to remove.
+4. **Handle uncertainty safely.** Fix verified errors. For remaining uncertainty use `[UNSUPPORTED CLAIM]`, `[ASSUMPTION]`, `[LIKELY ISSUE]` or `[SAFETY/COMPLIANCE]` with a specific explanation. Ask one focused question when a missing requirement is load-bearing. If nobody is available, **hold unsafe outward delivery or activation**, record the gap and escalate to the operator; do not merely remove a ready label. A genuinely safe limited draft may be delivered with its limits visible. Continue unrelated authorised work and independent monitoring.
+5. **Check the final delivered content.** Repair the generating source, rebuild/reassemble and rerun affected checks. A style pass can change facts or qualifications: revalidate those changes before appending the final record. Freeze the checked bytes; compare the installed/package identity where relevant. Test concurrent-data preservation and inspect the package and staged source index separately.
+6. **Report observed evidence honestly.** Quote actual tool output, never reconstructed output called verbatim. Record check scope, failures and unavailable paths. Falsify important guards with a known-bad case while a legitimate control stays green. Never label a deliverable ready while a relied-upon requirement is unresolved.
 
-| Claim type | Mandatory action | Tool |
-|------------|-----------------|------|
-| Code correctness | **Execute it** in the sandbox. Run the linter. Confirm imports resolve and the happy path runs. If it cannot run here (needs a live database, credentials, a browser), label it explicitly as untested with the reason. | terminal |
-| API / library / framework behaviour | Fetch current documentation before citing signatures, config keys, or behaviour. Never cite from memory for anything versioned. | Context7, web_fetch |
-| Package versions, availability | Check the registry. | npm/PyPI via terminal or web |
-| Clinical, scientific, physiological claims | Invoke a research workflow or fetch primary sources; cite the source of every figure. | web_search, web_fetch |
-| Current facts, prices, laws, product details | Search. If search is unavailable or inconclusive, state the claim as unverified — do not soften it into vague confidence. | web_search |
-| User-supplied material | Re-read the actual source before quoting or summarising it. Supplied material outranks every external source. | read_file / context |
-| Statistics, dates, named studies | Verified against a source in this session, or cut, or explicitly flagged. No third option. | as above |
+## Verification record and placement
 
-Anything invented to fill a gap — a plausible figure, a remembered API signature, an unfetched citation — fails the gate.
+For Tier 3, and Tier 2 with remaining uncertainty, use three terminal, consecutive, unadorned lines in the accompanying operator response (or an appropriate internal technical document):
 
-## Escalation ladder
-
-When a check fails, escalate in this order. Do not skip steps and do not stall on step 3 for minor points.
-
-1. **Verify** — take the action above.
-2. **Qualify** — if unverifiable (including when a required tool or connector is unavailable this session), mark it with the shared labels: `[UNSUPPORTED CLAIM]`, `[ASSUMPTION]`, `[LIKELY ISSUE]`, `[SAFETY/COMPLIANCE]` — a deliberate subset of verify-results' full vocabulary; `[VERIFIED ERROR]` and `[STYLE/CLARITY]` rarely apply pre-delivery because such findings are simply fixed.
-3. **Ask** — if the unverified claim is load-bearing (the deliverable is wrong or dangerous without it), ask the user one focused question rather than guessing.
-4. **Deliver flagged** — if proceeding anyway, deliver with the limitation stated plainly — and **never label the output production-ready, client-ready, or publication-ready**. That final rule is the actual guardrail; everything above it is process.
-
-## Verification footer
-
-Tier 3 outputs (and Tier 2 with unverified residue) are accompanied by this exact block, kept terse:
-
-```
----
-Verified: <actions taken — e.g. "code executed, test suite green; Laravel 12 mail config fetched via Context7">
-Unverified: <claims that could not be checked, or "none">
-Assumptions: <assumptions relied upon, or "none">
+```text
+Verified: actions actually taken and their observed results
+Unverified: specific unexecuted paths or none
+Assumptions: assumptions relied upon or none
 ```
 
-**Placement rule:** the footer — and any inline `[UNSUPPORTED CLAIM]`-style labels — belong in the chat response accompanying delivery, or inside internal/technical deliverables. They must **never** appear inside a client-facing artefact (an HTML report, a published page, a document the client reads). The client sees clean work; the user sees the verification record alongside it.
+Fill every field; placeholders and empty values are not records. Keep shared qualification labels when warranted. The footer is a self-report, **not proof** that checks happened. Refer to actual command results and exact artefacts where available.
 
-The footer is the observable proof the gate ran, and it is what makes this skill testable. Do not narrate the checking process anywhere else in the response — the work stays silent, the footer speaks.
+Do not put internal records/labels in a client-facing artefact. Substantive limitations the recipient needs must still be visible in suitable language; clean presentation is not concealment. Do not withhold useful progress or blocker information merely because a footer exists.
 
-## Ordering with a style pass
+## Optional helper — bounded mechanical checks
 
-When a style/voice filter runs on the same deliverable: quality-guard verifies facts first, the style pass sweeps second, and the verification footer is appended **after** the style pass — so the filter cannot soften uncertainty qualifiers, and the quality pass cannot reintroduce banned phrasing.
+Invoke through `terminal` from this installed skill directory; replace `python` with the working target interpreter:
 
-## Reference
+```text
+python scripts/quality_gate.py lint --response response.md --artefact client.html
+python scripts/quality_gate.py run --receipt check.json --artefact app.py -- python -m unittest
+python scripts/quality_gate.py verify --receipt check.json --artefact app.py
+python scripts/test_quality_gate.py
+```
 
-For the fuller claim-type → action mapping, including edge cases (mixed-tier documents, code that spans sandbox and live-only behaviour, claims sourced from the user's own prior work), read `references/verification-actions.md`.
+- `lint` checks the terminal record and obvious record leakage into explicitly supplied **client** artefacts, not arbitrary readiness prose. Plain text/Markdown responses and text/Markdown/simple HTML artefacts only; UTF-8 and BOM-marked UTF-16, up to 4 MiB per text input. Unsupported formats fail explicitly. No language blacklist. Tier 1/2 may omit the record; the operator still decides whether Tier 2 uncertainty requires one.
+- `run` executes only the explicit approved argv after `--`, without a shell or stdin. Completion/accounting is **direct-child-only**, explicitly recorded as `completion_scope: direct_child` and `descendant_completion: not_assessed`. Commands must wait for their own checks before exiting; any surviving descendant, even an ordinary non-detached one, can outlive accounting. It records the direct child's actual exit status, observed output hashes/counts and before/after SHA-256/size manifests for every explicit final artefact. Raw output and argv are not saved. Build first: checks must not rewrite the frozen artefacts. The receipt destination must be new and writable before execution starts.
+- `verify` checks all explicitly supplied required receipts against the explicitly supplied current artefacts. It never executes receipt content or follows additional receipt paths. Changed bytes, failed or incomplete checks cannot pass. Receipt provenance is local and forgeable, not authenticated proof.
+- Exit **0** means the stated bounded check passed; **1** means findings or a completed failing check; **2** means invalid input, infrastructure failure, timeout/output limit or a required receipt-write failure. JSON is ASCII-safe for Windows pipelines. Every result says `readiness: not_assessed`; **no exit code authorises delivery**.
+
+Read the human [README](README.md), [extended actions](references/verification-actions.md), [helper implementation](scripts/quality_gate.py), [offline tests](scripts/test_quality_gate.py) and [qualification boundaries](VERIFICATION.md). These support files must travel with the skill; a bare SKILL.md is not a complete helper install.
+
+## Pitfalls
+
+- A filled record can be false; a successful format scan does not qualify production behaviour.
+- Do not demand every assumption be literally none. Required checks and load-bearing uncertainty govern the readiness decision.
+- Text extraction is not browser, Office, PDF or live-service acceptance. Quote examples are not delivery claims.
+- Receipts contain local paths and potentially identifying hashes. Keep them private; do not commit them or use this runner for secret-bearing probes. Existing permissions and destructive-action approvals remain binding.
+- There is no sandbox, execution attestation, arbitrary-process containment or automatic runtime hook. While the direct child is alive, timeout termination attempts its owned group/tree; once it exits, ordinary as well as detached surviving descendants are outside completion/output accounting. Output limits are monitored, not a hard disk quota. Only regular text/receipt files are accepted, with capped reads; this is not protection against a hostile concurrent filesystem writer.
+
+## Verification
+
+Run the shipped offline suite, compare test names/counts across supported targets and require zero skipped tests. Exercise the actual installed helper, not only imports. Test bad records, legitimate qualifications, failed commands, changed artefacts and broken receipt paths. A mutation must fail its targeted assertion, not merely crash an import. Record procedural scenario outcomes separately; passing helper tests does not establish model compliance or fewer hallucinations.

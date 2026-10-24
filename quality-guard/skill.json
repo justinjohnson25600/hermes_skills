@@ -1,12 +1,17 @@
 {
     "name": "quality-guard",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "category": "reviewer",
-    "description": "Pre-delivery verification gate: mandatory verification actions before client-ready, production-ready or publication-ready output.",
+    "description": "Pre-delivery verification discipline with bounded record and execution-evidence checks; never automatic readiness certification.",
     "needs_reviewer_config": false,
     "skill_files": [
         "README.md",
-        "references/verification-actions.md"
+        "CHANGELOG.md",
+        "VERIFICATION.md",
+        "references/verification-actions.md",
+        "scripts/quality_gate.py",
+        "scripts/test_quality_gate.py"
     ],
+    "verify_skill": "scripts/test_quality_gate.py",
     "next_step": "ask for it: \"apply the quality guardrail to this\""
 }
