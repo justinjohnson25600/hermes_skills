@@ -12,6 +12,9 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 | [llm-council](llm-council/) | 1.0.0 | Multi-model council: independent opinions, anonymised peer review, chairman synthesis that keeps dissent. Ships the protocol plus patches for the `hermes-council` plugin runtime (opt-in strict protocol, egress redaction, stake-weighted flaws) |
 | [senior-dev-prompt](senior-dev-prompt/) | 0.0.6 | Turns a rough build request into a senior-developer brief: requirements, risk safeguards, checkable acceptance criteria and a workflow sized to the job (superpowers, GSD or inline steps). Optional review by other model families through dev-pair, and tool suggestions you choose to install. Writes the brief, never the build |
 | [verify-results](verify-results/) | 0.0.8 | Structured post-hoc critique of finished work — six passes producing labelled findings and an APPROVE / REVISE / DO NOT USE verdict. Runs inline, or routes to a different model via dev-pair |
+| [estate-experiments](estate-experiments/) | 0.1.0 |
+| [client-literature-monitor](client-literature-monitor/) | 0.1.0 | PubMed sweep per client case files' flagged markers; new-items-only digests, honest-unknown sources, silent when nothing new |
+ Baseline-vs-trial experiment harness with keep/discard receipts — measure before changing anything that runs repeatedly |
 | [quality-guard](quality-guard/) | 0.1.1 | Pre-delivery verification discipline: actual checks, safe holds and honest limits, with optional bounded record linting and execution receipts. A footer or passing helper is not readiness proof |
 | [caveman](caveman/) | 0.1.0 | Terse output mode that cuts token spend while keeping every fact (vendored: JuliusBrussee/caveman) |
 | [make-interfaces-feel-better](make-interfaces-feel-better/) | 0.1.1 | UI polish review: animations, typography, shadows, hit areas (vendored: jakubkrehel/make-interfaces-feel-better) |

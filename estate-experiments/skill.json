@@ -1,0 +1,16 @@
+{
+    "name": "estate-experiments",
+    "version": "0.1.0",
+    "category": "software-development",
+    "description": "Baseline-vs-trial experiment harness with keep/discard receipts for anything that runs repeatedly.",
+    "skill_files": [
+        "scripts/experiment_harness.py",
+        "scripts/experiment_harness_runner.py",
+        "experiments/01-dr-backup-manifest-cache/intent.md",
+        "experiments/01-dr-backup-manifest-cache/baseline.sh",
+        "experiments/01-dr-backup-manifest-cache/trial.sh",
+        "experiments/01-dr-backup-manifest-cache/metric.py",
+        "experiments/01-dr-backup-manifest-cache/receipt.json"
+    ],
+    "next_step": "copy experiments/01-dr-backup-manifest-cache as the shape for your first experiment, then python3 scripts/experiment_harness.py run <dir>"
+}

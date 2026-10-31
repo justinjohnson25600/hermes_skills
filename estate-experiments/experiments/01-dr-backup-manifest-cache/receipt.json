@@ -1,0 +1,17 @@
+{
+  "experiment": "01-dr-backup-manifest-cache",
+  "at": "2026-10-30T20:50:35+00:00",
+  "intent": "# Experiment: cache the DR-backup manifest verification",
+  "baseline": {
+    "rc": 0,
+    "wall_s": 5.24
+  },
+  "trial": {
+    "rc": 0,
+    "wall_s": 0.42
+  },
+  "baseline_metric": 5.21,
+  "trial_metric": 0.19,
+  "verdict": "keep",
+  "why": "baseline 5.210s -> trial 0.190s (96% faster)"
+}
