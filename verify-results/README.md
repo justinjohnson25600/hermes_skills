@@ -291,7 +291,7 @@ the PASS 5 commands yourself — that is the only fully independent path.
 
 ## Version & history
 
-Current: **0.0.8**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
+Current: **0.0.10**. See [CHANGELOG.md](CHANGELOG.md) — semver, patch (+0.0.1) per
 published change.
 
 ## License

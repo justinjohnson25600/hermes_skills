@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.8
+version: 1.2.9
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -155,6 +155,37 @@ Running the panel:
 - **Anything you add after the last review is unreviewed.** Mark it so in the
   artefact and in your report, and put it before the panel at the next gate
   rather than presenting it as endorsed.
+
+### Sequential co-development chains (cumulative contributors)
+
+When the user names several models to contribute to one document in order — each
+reads the draft plus the earlier contributors' raw reviews — run one paid
+`critique` per contributor, strictly in sequence (each depends on the previous
+output, so the parallel panel rules above do not apply), each in its own
+`--session`:
+
+- **Contributor N's evidence is the current draft plus the prior reviewers' raw
+  responses.** Pass each earlier response as its own `--files` entry (watch the
+  per-file cap; confirm `coverage: complete`) and let the contributor read them
+  unfiltered — never substitute your triage summary for the raw reviews.
+- **Preserve each contributor's exact input snapshot** (the draft as that
+  contributor saw it) and its `--json` receipt next to the final artefact. The
+  chain's provenance is only auditable if every packet survives.
+- **`--gate` exit 2 is triage input in a chain, not a failed review.** A
+  PROCEED WITH CHANGES verdict still fails the gate when the findings include a
+  `[BLOCKER]`; in a chain that blocker is the next revision's input. Aggregate
+  and report from route receipts (verdict, findings, reported model, coverage),
+  not from gate exit codes.
+- **Edits made after the last contributor are unreviewed.** Say so in the
+  artefact's status line and in the report; presenting the chain as endorsing
+  final bytes is a false provenance claim. A convergence round (all
+  contributors re-review the final text) is a new set of paid calls — propose
+  it, never auto-run it.
+- **Carry the owner's non-negotiable wording verbatim through every revision.**
+  When the user fixes a phrase as standing policy, keep it byte-identical; do
+  not paraphrase the load-bearing line into a weaker variant and do not adopt a
+  reviewer's softer rewrite — a hedged headline gives a lazy executor exactly
+  the early exit the line exists to close.
 
 ### Named fallback ladders and the closeout state
 

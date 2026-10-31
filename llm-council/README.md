@@ -69,4 +69,4 @@ these patches.
 Protocol and runtime: [girayk/hermes-council](https://github.com/girayk/hermes-council),
 after [karpathy/llm-council](https://github.com/karpathy/llm-council).
 
-Current: **1.0.0**. See [CHANGELOG.md](CHANGELOG.md).
+Current: **1.0.1**. See [CHANGELOG.md](CHANGELOG.md).

@@ -1,4 +1,8 @@
-# Changelog — dev-pair
+# Changelog
+
+## 1.2.9 — honed live guidance landed (sequential co-development chains) (2026-10-30)
+- SKILL.md synced from the honed live copy on hermes-dev (mac-mini).
+ — dev-pair
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 

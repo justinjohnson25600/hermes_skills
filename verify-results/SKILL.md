@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.8
+version: 0.0.10
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -306,6 +306,18 @@ devpair verify --with <provider>/<model> \
 - Same-family warns rather than refuses. "Verify with opus" while running Opus is
   a legitimate instruction; the warning just records that the review is not
   independent.
+- **Build the packet from ONE point in time and say which.** Capturing an output
+  file before a fix and quoting numbers from after it (or vice versa) hands the
+  reviewer an internally inconsistent packet, and the mismatch it correctly flags
+  will read as your headline error even though no error exists at either instant.
+  If work continued between capture and send, re-capture every artifact in the
+  packet from the same state before routing the review.
+- **Attribute uncommitted hunks before sending a working-tree diff.** A shared
+  checkout can carry another session's edits beside yours; a diff you did not
+  author reads to the reviewer as YOUR undeclared change, and its verdict (rightly)
+  demands you defend or split work that is not yours. Send only your hunks, or
+  name the co-resident hunks and their owner in the brief so the reviewer can
+  grade them as context, not as the work under review.
 
 `devpair verify` returns the same passes and labels. With `--gate` it exits 2 on
 `DO NOT USE` / `REVISE BEFORE USE`, on any `[CRITICAL]` finding, on a verdict it
@@ -361,6 +373,17 @@ ceremony — in practice it changes outcomes in both directions. A reviewer's
 finding has been confirmed in substance while its stated conclusion was wrong
 (the concern real, the mechanism misdiagnosed), and a confident finding has been
 disproved outright. You cannot tell which you have without reproducing it.
+
+**Grade a packet-mismatch finding against the LIVE system, not the packet.** A
+reviewer that flags your summary as inconsistent with the attached evidence is
+right about the inconsistency — but if the work was repaired between capturing
+the evidence and writing the summary, the correct settling check is one live
+re-run of the authoritative command, not a correction of the summary. Likewise a
+finding of "unsupported claim" about state the reviewer cannot see (a hold list,
+a report file) is a packet gap: attach the authoritative artifact next round and
+re-grade, rather than accepting the label as a defect. A review packet is a
+snapshot; say which revision of the work it captured, and re-capture the day the
+verdict matters.
 
 The asymmetry that makes this worth the effort: **a missed defect leaves you
 where you already were; a fabricated defect makes you change working code to

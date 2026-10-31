@@ -1,29 +1,29 @@
 {
-  "name": "dev-pair",
-  "version": "1.2.8",
-  "category": "software-development",
-  "description": "Second-opinion critique/review from a different LLM.",
-  "state_dir": "devpair",
-  "command": "devpair",
-  "entrypoint": "devpair.py",
-  "files": [
-    "devpair.py",
-    "test_devpair.py"
-  ],
-  "verify": "test_devpair.py",
-  "needs_reviewer_config": true,
-  "requires": {
-    "python": ">=3.8",
-    "commands": [
-      "hermes"
+    "name": "dev-pair",
+    "version": "1.2.9",
+    "category": "software-development",
+    "description": "Second-opinion critique/review from a different LLM.",
+    "state_dir": "devpair",
+    "command": "devpair",
+    "entrypoint": "devpair.py",
+    "files": [
+        "devpair.py",
+        "test_devpair.py"
     ],
-    "python_packages": [
-      "pyyaml"
+    "verify": "test_devpair.py",
+    "needs_reviewer_config": true,
+    "requires": {
+        "python": ">=3.8",
+        "commands": [
+            "hermes"
+        ],
+        "python_packages": [
+            "pyyaml"
+        ]
+    },
+    "next_step": "run `devpair doctor` (static, free) to check config and roster, then `devpair review --diff --driver PROVIDER/MODEL --requested-by user`",
+    "skill_files": [
+        "references/field-notes.md",
+        "references/offline-assessment.md"
     ]
-  },
-  "next_step": "run `devpair doctor` (static, free) to check config and roster, then `devpair review --diff --driver PROVIDER/MODEL --requested-by user`",
-  "skill_files": [
-    "references/field-notes.md",
-    "references/offline-assessment.md"
-  ]
 }

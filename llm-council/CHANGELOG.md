@@ -1,4 +1,8 @@
-# Changelog — llm-council
+# Changelog
+
+## 1.0.1 — honed live guidance landed (2026-10-30)
+- SKILL.md synced from the honed live copy on hermes-dev (mac-mini).
+ — llm-council
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 

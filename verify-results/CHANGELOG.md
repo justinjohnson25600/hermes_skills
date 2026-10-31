@@ -1,4 +1,8 @@
-# Changelog — verify-results
+# Changelog
+
+## 0.0.10 — honed live guidance landed (one-point-in-time packets) (2026-10-30)
+- SKILL.md synced from the honed live copy on hermes-dev (mac-mini).
+ — verify-results
 
 Semver, newest first. Patch increments (+0.0.1) per published change.
 

@@ -1,7 +1,7 @@
 ---
 name: llm-council
 description: Use when the user asks for a council, second opinions, a debate, or multi-perspective deliberation on a question — or when a decision is high-stakes, contested, or ambiguous enough that a single answer risks being confidently wrong or sycophantic. Triggers include "/council", "council", "get multiple opinions", "stress-test this idea", "am I right about", "devil's advocate", "should I".
-version: 1.0.0
+version: 1.0.1
 platforms: [macos, linux, windows]
 metadata:
   hermes:
@@ -136,6 +136,32 @@ These counter the failure modes documented in Cheng et al. (2025):
 | Erase the absent party from a conflict | The Absent-Party Advocate seat argues their strongest case, quoted verbatim (Stage 3, part 3) |
 | Present the AI as objective | Disclose the endorsement split and the ~50% LLM over-endorsement base rate (Stage 3, part 2) |
 | Soften bad news about the user's idea | If the council's verdict is "no", the Verdict says "no" in the first sentence |
+
+## Paid cross-provider councils (dev-pair)
+
+When the owner names specific MODELS as contributors or reviewers ("use Opus,
+Astra, DeepSeek and GLM"), subagent seats cannot satisfy the request — subagents
+run on the session's model. A panel of named models is a dev-pair chain or
+panel: each seat is a paid `devpair critique`/`review` call (`--with
+PROVIDER/MODEL`, `--requested-by user`), and dev-pair's own rules govern it
+(own `--session` per reviewer, same evidence revision, route receipts). The
+protocol below stays correct for same-model multi-persona deliberation; do not
+dress a persona panel up as a multi-model council or vice versa.
+
+- **Resolve every spoken model name to an exact configured provider/model
+  before launching a seat.** A name that matches no route is a report-and-ask,
+  never a lookalike launch — a near-miss model silently answering is the exact
+  sycophancy/verification failure this skill exists to prevent.
+- **A same-family reviewer is legitimate when the user names it** — proceed
+  with the tool's warning, and disclose family overlap in the report. Independence
+  claims come from family diversity, so say which seats were not independent.
+- **Attribute each response to what the route receipt reports**, not the
+  requested name: a provider can answer with a fallback model. In the synthesis,
+  separate "requested route" from "reported route" per seat.
+- **Family classifiers can miss legitimate families.** A tool labelling a seat
+  `INDEPENDENCE UNVERIFIED` because its family is unknown is an unresolved label,
+  not evidence of sameness — verify against the provider's own naming before
+  telling the user the panel was or was not independent.
 
 ## Execution Notes
 
