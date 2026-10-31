@@ -19,3 +19,10 @@ changing. Mitigated: the cache key is the manifest's own content hash — if any
 byte changes, the manifest no longer matches reality only if the USB set was rewritten
 with the same manifest, which the daily backup never does (each set is timestamped).
 Cache lives beside the watcher state (Application Support), not on the USB drive.
+
+owner: hermes-dev ops scripts (mac-mini; apply locally, not fleet-managed)
+
+## Guard (v0.2)
+Each arm must still run the full morning check and emit its JSON verdict block
+(`ESTATE MORNING CHECK` header + a dr_backup result). A faster arm that skipped
+the checks fails the guard and is discarded.

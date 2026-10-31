@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.10 — 2026-10-31
+- Honed live guidance landed (SKILL.md resync from hermes-dev).
+
 ## 1.2.9 — honed live guidance landed (sequential co-development chains) (2026-10-30)
 - SKILL.md synced from the honed live copy on hermes-dev (mac-mini).
  — dev-pair

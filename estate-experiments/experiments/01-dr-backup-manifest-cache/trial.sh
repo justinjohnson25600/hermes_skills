@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Trial: check with the manifest-verification cache, warm cache (the first run writes it).
+# Trial: the production check as-is (manifest-verification cache active, weekly
+# forced full re-verify). One variable differs from baseline: the cache.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
-/usr/bin/time -p env EMC_TARGET="$PWD/estate_morning_check_cached.py" python3 experiment_harness_runner.py --date "$(date +%F)" > /dev/null
-/usr/bin/time -p env EMC_TARGET="$PWD/estate_morning_check_cached.py" python3 experiment_harness_runner.py --date "$(date +%F)" > /dev/null
+python3 ~/.hermes/profiles/hermes-dev/scripts/estate_morning_check.py --date "$(date +%F)"

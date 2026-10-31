@@ -1,0 +1,6 @@
+{"experiment": "01-dr-backup-manifest-cache", "arm": "baseline", "rep": 0, "rc": 0, "wall_s": 5.251, "metric": 5.251, "guard": true, "at": "2026-10-31T11:50:23+00:00"}
+{"experiment": "01-dr-backup-manifest-cache", "arm": "trial", "rep": 0, "rc": 0, "wall_s": 0.213, "metric": 0.213, "guard": true, "at": "2026-10-31T11:50:23+00:00"}
+{"experiment": "01-dr-backup-manifest-cache", "arm": "trial", "rep": 1, "rc": 0, "wall_s": 0.213, "metric": 0.213, "guard": true, "at": "2026-10-31T11:50:23+00:00"}
+{"experiment": "01-dr-backup-manifest-cache", "arm": "baseline", "rep": 1, "rc": 0, "wall_s": 5.194, "metric": 5.194, "guard": true, "at": "2026-10-31T11:50:28+00:00"}
+{"experiment": "01-dr-backup-manifest-cache", "arm": "baseline", "rep": 2, "rc": 0, "wall_s": 5.205, "metric": 5.205, "guard": true, "at": "2026-10-31T11:50:34+00:00"}
+{"experiment": "01-dr-backup-manifest-cache", "arm": "trial", "rep": 2, "rc": 0, "wall_s": 0.207, "metric": 0.207, "guard": true, "at": "2026-10-31T11:50:34+00:00"}

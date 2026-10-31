@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.9
+version: 1.2.10
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -149,9 +149,11 @@ Running the panel:
   attached as evidence. Each reviewer re-checks its own earlier findings against
   the revision while staying blind to the others; ask it to lead with any
   earlier finding the revision integrated wrongly or incompletely.
-- **After triage, probe every claim the artefact makes about real tools**: read
-  the source, run `--help` or a dry run, inspect the actual data. Reviewers only
-  read the text, so an artefact that misdescribes a tool passes all of them.
+- **Probe every claim the artefact makes about real tools — before the paid
+  round and again after triage**: read the source, run `--help` or a dry run,
+  inspect the actual data, and put the verified fact in the packet. Reviewers
+  only read the text, so an artefact that misdescribes a tool passes all of
+  them — a panel spent critiquing false premises buys a redo at full price.
 - **Anything you add after the last review is unreviewed.** Mark it so in the
   artefact and in your report, and put it before the panel at the next gate
   rather than presenting it as endorsed.
@@ -186,6 +188,17 @@ output, so the parallel panel rules above do not apply), each in its own
   not paraphrase the load-bearing line into a weaker variant and do not adopt a
   reviewer's softer rewrite — a hedged headline gives a lazy executor exactly
   the early exit the line exists to close.
+- **Turn the owner's mandates into scripted assertions and run them after every
+  revision.** Grep the mandated phrase, hash each input snapshot, and read
+  verdict/coverage/route from the `--json` receipts — do not certify a
+  byte-level invariant from reading the draft, because an innocent reflow can
+  break it and proof is a command, not an eyeball.
+- **Triage a behavioural contract for self-granted escape hatches even when no
+  reviewer flagged one.** Any clause letting the executor set its own effort
+  limit, declare a task impractical, or pick its own "sufficient" evidence is
+  the early exit the document exists to close; a self-selected limit must read
+  as a checkpoint that names the next authorised continuation, never a stopping
+  condition.
 
 ### Named fallback ladders and the closeout state
 
@@ -504,6 +517,7 @@ and challenges a wrong premise first. These are prompt-level Council crossovers
 - **Evidence kept outside the working tree draws false citation flags.** The `UNVERIFIED CLAIMS` check resolves cited paths against the current tree, so a file that WAS sent from elsewhere (a scratch folder, a staging copy) can be reported as missing. Re-check the cited lines in the file actually sent before discarding a review on that flag, and keep the flag rather than editing the receipt. Run from the tree that holds the evidence to avoid it.
 - **Redaction can rewrite ordinary code.** Assigned-secret redaction also replaces lines such as `run(secret=secret)` and `token = (deadline, proc)`, so the reviewer can report a defect that is not in your source. Watch the redaction count and anchor findings against the real file (details in `references/field-notes.md`).
 - **A fixed count of authorised calls does not authorise the loop.** "Authorise both calls" covers the two named runs; sending your fixes back for re-verification is a NEW paid call and needs its own ask. If an extra call slips out, disclose it in the same report (session, run id, token estimate) and put retrospective approval on the user's decision list; never fold it silently into "verification".
+- **Match a late background-process completion to its run id and receipt before treating it as new input.** A backgrounded review that finishes after you reported is often the same run you already triaged, re-delivered; dedupe on run id and packet hash, never on "a completion notification appeared".
 - **A short verdict-less reply is a failed attempt**, not a review (a model expecting tools often answers "I'll check X first…"); devpair falls through to the next backend. Long verdict-less reviews are kept and fail the gate closed.
 - **Treating it as an oracle.** It has no access to your terminal, tests, or
   runtime — it reasons from what you pasted. Verify its claims before acting on

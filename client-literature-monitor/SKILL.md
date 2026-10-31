@@ -1,6 +1,6 @@
 ---
 name: client-literature-monitor
-version: 0.1.0
+version: 0.2.0
 author: justin
 license: MIT
 description: Use when a business client's case files (flagged analytes, topics, keywords) should drive a recurring literature sweep — PubMed per client, new-items-only digests, silent when nothing new. Built for Theorem Metabolic; generalisable to any client with structured case data.

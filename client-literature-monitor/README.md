@@ -16,5 +16,5 @@ python3 install.py client-literature-monitor
 3. Create the weekly cron job with the prompt from
    `scripts/cron_prompt_template.md`, `--script <filename>`, `--deliver local`.
 
-Version 0.1.0 — 2026-10-30: first release, extracted from the Theorem Metabolic
+Version 0.2.0 — 2026-10-30: first release, extracted from the Theorem Metabolic
 deployment on mac-mini (cron 66d996ed2a04).

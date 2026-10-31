@@ -1,17 +1,67 @@
 {
   "experiment": "01-dr-backup-manifest-cache",
-  "at": "2026-10-30T20:50:35+00:00",
+  "at": "2026-10-31T11:50:34+00:00",
   "intent": "# Experiment: cache the DR-backup manifest verification",
-  "baseline": {
-    "rc": 0,
-    "wall_s": 5.24
-  },
-  "trial": {
-    "rc": 0,
-    "wall_s": 0.42
-  },
-  "baseline_metric": 5.21,
-  "trial_metric": 0.19,
+  "owner": "hermes-dev ops scripts (mac-mini; apply locally, not fleet-managed)",
+  "runs": 3,
+  "baseline": [
+    {
+      "arm": "baseline",
+      "rep": 0,
+      "rc": 0,
+      "wall_s": 5.251,
+      "metric": 5.251,
+      "guard": true,
+      "at": "2026-10-31T11:50:23+00:00"
+    },
+    {
+      "arm": "baseline",
+      "rep": 1,
+      "rc": 0,
+      "wall_s": 5.194,
+      "metric": 5.194,
+      "guard": true,
+      "at": "2026-10-31T11:50:28+00:00"
+    },
+    {
+      "arm": "baseline",
+      "rep": 2,
+      "rc": 0,
+      "wall_s": 5.205,
+      "metric": 5.205,
+      "guard": true,
+      "at": "2026-10-31T11:50:34+00:00"
+    }
+  ],
+  "trial": [
+    {
+      "arm": "trial",
+      "rep": 0,
+      "rc": 0,
+      "wall_s": 0.213,
+      "metric": 0.213,
+      "guard": true,
+      "at": "2026-10-31T11:50:23+00:00"
+    },
+    {
+      "arm": "trial",
+      "rep": 1,
+      "rc": 0,
+      "wall_s": 0.213,
+      "metric": 0.213,
+      "guard": true,
+      "at": "2026-10-31T11:50:23+00:00"
+    },
+    {
+      "arm": "trial",
+      "rep": 2,
+      "rc": 0,
+      "wall_s": 0.207,
+      "metric": 0.207,
+      "guard": true,
+      "at": "2026-10-31T11:50:34+00:00"
+    }
+  ],
   "verdict": "keep",
-  "why": "baseline 5.210s -> trial 0.190s (96% faster)"
+  "why": "median 5.205 -> 0.213; margin 4.992 exceeds noise spread 0.057 over 3 interleaved runs"
 }
