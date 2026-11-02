@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.0.12 — 2026-11-02
+- SKILL.md synced from honed live copy on hermes-dev.
+
 ## 0.0.10 — honed live guidance landed (one-point-in-time packets) (2026-10-30)
 - SKILL.md synced from the honed live copy on hermes-dev (mac-mini).
  — verify-results

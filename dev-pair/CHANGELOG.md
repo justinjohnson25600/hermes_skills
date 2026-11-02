@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.14 — 2026-11-02
+- SKILL.md synced from honed live copy on hermes-dev.
+
 ## 1.2.10 — 2026-10-31
 - Honed live guidance landed (SKILL.md resync from hermes-dev).
 

@@ -1,0 +1,12 @@
+{
+  "_comment": "client-literature-monitor deployment config. Copy to the client box, edit, and point LITERATURE_MONITOR_CONFIG at it (or place beside the state file). The deployed script stays repo-identical.",
+  "clients_root": "~/Documents/<CLIENT-NAME>/clients",
+  "state_file": "~/Documents/<CLIENT-NAME>/literature-state.json",
+  "window_days": 30,
+  "retmax": 15,
+  "page_cap": 200,
+  "query_hints": {
+    "Example Analyte Name": "\"analyte phrase\"[Title/Abstract] AND (client-context[Title/Abstract])"
+  },
+  "_delivery": "digest email address lives in the cron prompt, not here"
+}

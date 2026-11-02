@@ -1,11 +1,12 @@
 {
     "name": "client-literature-monitor",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "category": "devops",
     "description": "PubMed sweep per client case files' flagged markers; new-items-only digests, honest-unknown sources, silent when nothing new.",
     "skill_files": [
         "scripts/theorem_literature_monitor.py",
-        "scripts/cron_prompt_template.md"
+        "scripts/cron_prompt_template.md",
+        "scripts/config.example.json"
     ],
     "next_step": "copy scripts/theorem_literature_monitor.py into the client profile's scripts/ dir, set CLIENTS_ROOT/STATE/QUERY_HINTS, create the weekly cron job"
 }

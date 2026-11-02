@@ -1,7 +1,7 @@
 ---
 name: dev-pair
 description: "Second-opinion critique/review from a different LLM."
-version: 1.2.10
+version: 1.2.14
 author: Justin Johnson
 license: MIT
 platforms: [macos, linux, windows]
@@ -110,7 +110,10 @@ Same-family (a Claude driver reviewed by Claude) prints a warning and proceeds �
 it is the user's call, not a hard block.
 
 If they name a roster entry instead ("use kimi"), `--reviewer kimi` is the
-shorter form. If they express no preference, let the tool pick the first
+shorter form. `--with` and `--reviewer` are alternatives — passing both refuses
+before any spend (the tool will not guess which reviewer you meant); the free
+dry run surfaces the refusal. A bare model in `--with` resolves its provider
+from the roster or refuses — name PROVIDER/MODEL to be sure. If they express no preference, let the tool pick the first
 independent reviewer and **tell them which model answered** so they can redirect.
 
 ### More than one reviewer (a panel)
@@ -199,6 +202,13 @@ output, so the parallel panel rules above do not apply), each in its own
   the early exit the document exists to close; a self-selected limit must read
   as a checkpoint that names the next authorised continuation, never a stopping
   condition.
+- **A behavioural contract states requirements without claiming mechanisms
+  exist.** Split what is mechanically enforced (gates, managed entrypoints)
+  from what prose merely asks for; a sentence implying a safeguard is live
+  before the mechanism ships licenses exactly the early exit the document
+  exists to close. Keep the always-loaded paragraph short — always-loaded
+  context is budget-truncated head+tail, so its middle can silently vanish;
+  depth belongs in an on-demand skill, not in always-on prose.
 
 ### Named fallback ladders and the closeout state
 
@@ -222,6 +232,69 @@ yourself"), the spend is bounded only if you bound it in writing:
   per-reviewer budgets consumed and remaining, exact model resolutions, and the
   final-ruling rule. The next window reads the file instead of re-deriving the
   budget, and cannot overspend by forgetting rounds it never saw.
+
+### Bounding a multi-round panel loop ("one more pass")
+
+A panel re-reviewing a large artefact does not converge to zero findings — every
+full-packet round re-reads everything and surfaces new MINORs — so bound the
+loop in writing before the first paid round:
+
+- **Write the bound down first**: maximum rounds, per-round budget, and the
+  signoff rule (for example, "no finding that changes a requirement = signoff").
+  A standing "one more pass" authorises one pass, not an unbounded loop. When
+  the bound is reached, stop and present the exact status to the user — split
+  verdicts included — with cumulative cost summed from route receipts and
+  unknown-cost routes named separately. A panel sitting at 2 PROCEED / 2 PROCEED
+  WITH CHANGES with only MINOR findings left has reached its decision point; the
+  user resolves that, not round N+1.
+- **Scope later rounds to the changed bytes.** Send the diff or changed
+  sections plus the triage file, not the full packet again — a full re-read
+  re-litigates settled findings and manufactures new ones.
+- **Keep a rolling triage file inside every round's packet**, restating each
+  open item and its disposition. A reviewer's own session history truncates
+  across many rounds ("my earlier list is cut off"), so the file — not the
+  session — is the seat's durable memory; without it the reviewer re-derives
+  findings from your summary and can silently drop its own flip conditions.
+- **Prove what each seat saw by hash, not self-report.** Stage each round's
+  exact input files in a per-round directory, put the packet sha256 in the ask,
+  and verify unchanged artefacts byte-identical by hash afterwards. Reviewers
+  cannot check what earlier rounds contained and will lean on your triage's
+  claims; the hash is the only evidence of what was actually reviewed.
+- **Amendments made after a round are unreviewed** — carry them as the next
+  round's diff-scoped evidence (see the chain rule above), never as endorsed
+  bytes.
+- **Bound the owner-authorised final pass in a written scope file before the
+  paid call.** When a loop has been stopped and the owner authorises one
+  focused review of the outstanding changes: ONE paid invocation, no automatic
+  retry, and a backend failure ends the review (report and ask) — never a
+  silent substitution of another model, because each fallthrough is another
+  paid attempt inside a budget that authorised one. The signoff rule names
+  what does NOT count: bytes edited after the call, a conditional or
+  unparseable verdict, a route receipt that does not match the requested
+  model, or an unresolved material safety finding. Record which question each
+  owner affirmative answered — a later bare "yes" authorises the most recent
+  open question, not earlier pending ones. When that pass returns a conditional
+  verdict, prepare the revised bytes, file them beside the receipt marked
+  UNREVIEWED, and close the report with ONE narrow next-authorisation question
+  — a single follow-up scoped to exactly those bytes, offered as a fork
+  (narrow re-review vs hold), never a reopened loop.
+- **An owner-delegated loop decision ("you decide when it's ready")
+  authorises the stop call, not installation.** With that delegation, apply
+  the accepted prose fixes, mark them UNREVIEWED beside the receipt, and make
+  the driver call yourself instead of closing with another question: report
+  what is ready (design/engineering) versus what is not (installed bytes,
+  rollout), never present a conditional verdict as sign-off, and do not buy
+  one more prose round to launder the verdict — name the next gate as
+  implementation evidence (behaviour tests on real entrypoints) instead.
+  Weight each accepted edit by its direction: one adding a guard can wait for
+  the next scoped review; one RELAXING a restriction (reviewers flag these —
+  never treat the relaxation as self-evidently safe) returns to the next
+  review's diff scope or an explicit owner question.
+- **Resolve the named reviewer with static `devpair doctor` before building
+  the packet.** The table is free and shows the family landscape and
+  same-family traps; a reviewer the user named but that is absent from the
+  roster still routes via `--with`, and its absence is exactly what to notice
+  before spending, not after.
 
 ## Setup
 

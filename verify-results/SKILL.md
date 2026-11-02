@@ -1,7 +1,7 @@
 ---
 name: verify-results
 description: "Structured post-hoc critique of finished work — code, documents, or answers. Six passes producing severity-rated, labelled findings and a verdict of APPROVE / APPROVE WITH MINOR EDITS / REVISE BEFORE USE / DO NOT USE. Use when asked to verify, critique, audit, or second-opinion something that already exists."
-version: 0.0.10
+version: 0.0.12
 author: Hermes Agent
 license: MIT
 platforms: [macos, linux, windows]
@@ -52,8 +52,11 @@ EVIDENCE BASIS: full diff at 8f3a91c (240 lines, 3 files).
 Two things make that line falsifiable rather than a claim about yourself:
 
 - **Name the artefact** — a commit SHA, file path with line count, or version. A
-  verdict that does not say *which revision* it covers cannot be re-checked, and
-  the re-verification loop below has nothing to anchor to.
+verdict that does not say *which revision* it covers cannot be re-checked, and
+the re-verification loop below has nothing to anchor to. When the artefact
+travelled — reviewed on another host or in a subprocess — pin its sha256 and
+confirm the copy actually reviewed hashes to it; a verdict on a
+differently-hashed copy is a verdict on unknown text.
 - **Quote command output verbatim** — the literal final line (`34 passed, 0
   failed in 1.2s`), never a paraphrase of it. "The tests pass" is your word for
   it; the actual line is evidence. If you did not run it, say you did not.
@@ -182,6 +185,11 @@ critical finding to get to an approval.
   research, recognised standards, or authoritative references.
 - If uncertain, say so and mark confidence High / Medium / Low.
 - Flag false precision, overclaiming, invented detail, and unsupported certainty.
+- **A review loop converges.** Re-run the passes only against work that changed
+since the last verdict; an unchanged artefact earns no fresh review — restate
+the standing verdict and move on. Iterate fix → re-verify until driver and
+reviewer agree, then stop: further rounds on unchanged content are cost without
+information.
 - **"No material issues" is a real result.** Six headed passes create pressure to
   fill them; manufacturing a finding to look thorough is a failure of the skill,
   not a success. See the worked example below.
@@ -373,6 +381,15 @@ ceremony — in practice it changes outcomes in both directions. A reviewer's
 finding has been confirmed in substance while its stated conclusion was wrong
 (the concern real, the mechanism misdiagnosed), and a confident finding has been
 disproved outright. You cannot tell which you have without reproducing it.
+
+**Prove a refutation by mutating, not by arguing.** A reviewer who rejects a
+defence by reasoning ("that test can never fail, X resets the thing it checks")
+is making a claim about behaviour, not delivering evidence. The settling check
+is cheap: in a scratch copy, delete or bypass exactly the disputed control and
+run the suite against the mutant. Red against the mutant means the control does
+real work and the refutation is disproved; still green means the reviewer is
+right. Mutate a scratch copy, never the real file — the same discipline as the
+Prove layer in root-cause-prevention.
 
 **Grade a packet-mismatch finding against the LIVE system, not the packet.** A
 reviewer that flags your summary as inconsistent with the attached evidence is

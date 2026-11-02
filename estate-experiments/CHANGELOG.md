@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 — 2026-11-02
+- cron_ops_ledger.py: passive per-job run ledger from executions.db (snapshot read, never the live store).
+- selftest.sh: per-machine proof both skills are installed and working (deployed and repo layouts).
+- Experiment 02 (parallel manifest verify): 8.16s -> 1.18s median, guard-checked, keep; applied.
+
 ## 0.2.0 — 2026-10-31
 - Guard-checked verdicts: keep requires guard.sh proving the arm did the work; no guard = unproven.
 - Interleaved multi-run arms (default 3): median vs spread; verdicts inside noise refused.

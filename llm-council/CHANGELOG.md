@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.3 — 2026-11-02
+- SKILL.md synced from honed live copy on hermes-dev.
+
 ## 1.0.1 — honed live guidance landed (2026-10-30)
 - SKILL.md synced from the honed live copy on hermes-dev (mac-mini).
  — llm-council

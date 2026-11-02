@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.1 — 2026-11-02
+- scripts/config.example.json: deployment config template (client #2 = copy + edit, no script change).
+
 ## 0.2.0 — 2026-10-31
 - Two-phase state: new items pending -> delivered only after --confirm-delivered
   (agent runs it post-email). Crashes can no longer lose papers; pending re-offers.

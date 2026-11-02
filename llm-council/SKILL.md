@@ -1,7 +1,7 @@
 ---
 name: llm-council
 description: Use when the user asks for a council, second opinions, a debate, or multi-perspective deliberation on a question — or when a decision is high-stakes, contested, or ambiguous enough that a single answer risks being confidently wrong or sycophantic. Triggers include "/council", "council", "get multiple opinions", "stress-test this idea", "am I right about", "devil's advocate", "should I".
-version: 1.0.1
+version: 1.0.3
 platforms: [macos, linux, windows]
 metadata:
   hermes:
@@ -123,6 +123,8 @@ Produce the final deliverable with exactly these parts, in order:
 6. **What would change the verdict** — the 2–4 strongest flip conditions from members' "what would change my mind" statements; drop duplicates and trivia.
 7. **The one observation that would prove this verdict wrong** — a single concrete, checkable falsifier (e.g., "find a written record of X; if it exists, the verdict flips"). One sharp falsifier beats a generic verification checklist nobody runs.
 
+**Follow-through and format (owner standard):** the synthesis leads with the blocker/verdict and the approved fix as short bullets; narrative detail only on request. When the council surfaces blockers in work you own, the deliverable is the fixed work shipped in the same session — iterate and ship, never end at a findings list waiting for a go-ahead.
+
 ## Anti-Sycophancy Rules (all stages, including the chairman)
 
 These counter the failure modes documented in Cheng et al. (2025):
@@ -152,9 +154,22 @@ dress a persona panel up as a multi-model council or vice versa.
   before launching a seat.** A name that matches no route is a report-and-ask,
   never a lookalike launch — a near-miss model silently answering is the exact
   sycophancy/verification failure this skill exists to prevent.
+- **Probe each resolved seat before launching the panel.** A fuzzy name can
+  resolve to a route that silently binds a near-miss model (e.g. a requested
+  `opus-5.5` seat answering as `claude-haiku-5-5`) with no warning at all, so
+  ask each seat to state its exact model id and match the answer against the
+  expected id before running the panel; a mismatched seat is re-resolved or
+  dropped, never folded into the synthesis.
 - **A same-family reviewer is legitimate when the user names it** — proceed
   with the tool's warning, and disclose family overlap in the report. Independence
   claims come from family diversity, so say which seats were not independent.
+- **A standing "run one more pass" authorises one pass, not an unbounded
+  loop.** A panel re-reviewing a large artefact never converges to zero
+  findings — each full-packet round surfaces new MINORs and re-reads settled
+  ones. Write the bound first (max rounds, budget, signoff rule), scope later
+  rounds to the changed bytes, and keep a triage file inside the packet; at the
+  bound, stop and present the split verdicts with cumulative receipt costs.
+  Full procedure: dev-pair § Bounding a multi-round panel loop.
 - **Attribute each response to what the route receipt reports**, not the
   requested name: a provider can answer with a fallback model. In the synthesis,
   separate "requested route" from "reported route" per seat.

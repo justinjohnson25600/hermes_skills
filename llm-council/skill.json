@@ -1,6 +1,6 @@
 {
     "name": "llm-council",
-    "version": "1.0.1",
+    "version": "1.0.3",
     "category": "autonomous-ai-agents",
     "description": "Multi-model council deliberation that preserves dissent; protocol + hermes-council runtime patches.",
     "needs_reviewer_config": false,

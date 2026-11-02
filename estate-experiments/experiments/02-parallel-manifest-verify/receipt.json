@@ -1,0 +1,67 @@
+{
+  "experiment": "02-parallel-manifest-verify",
+  "at": "2026-11-02T21:35:24+00:00",
+  "intent": "# Experiment: parallelize the weekly full manifest verification",
+  "owner": "hermes-dev ops scripts (mac-mini; apply locally, not fleet-managed)",
+  "runs": 3,
+  "baseline": [
+    {
+      "arm": "baseline",
+      "rep": 0,
+      "rc": 0,
+      "wall_s": 6.013,
+      "metric": 6.013,
+      "guard": true,
+      "at": "2026-11-02T21:35:03+00:00"
+    },
+    {
+      "arm": "baseline",
+      "rep": 1,
+      "rc": 0,
+      "wall_s": 8.408,
+      "metric": 8.408,
+      "guard": true,
+      "at": "2026-11-02T21:35:14+00:00"
+    },
+    {
+      "arm": "baseline",
+      "rep": 2,
+      "rc": 0,
+      "wall_s": 8.159,
+      "metric": 8.159,
+      "guard": true,
+      "at": "2026-11-02T21:35:22+00:00"
+    }
+  ],
+  "trial": [
+    {
+      "arm": "trial",
+      "rep": 0,
+      "rc": 0,
+      "wall_s": 1.177,
+      "metric": 1.177,
+      "guard": true,
+      "at": "2026-11-02T21:35:04+00:00"
+    },
+    {
+      "arm": "trial",
+      "rep": 1,
+      "rc": 0,
+      "wall_s": 1.606,
+      "metric": 1.606,
+      "guard": true,
+      "at": "2026-11-02T21:35:06+00:00"
+    },
+    {
+      "arm": "trial",
+      "rep": 2,
+      "rc": 0,
+      "wall_s": 1.167,
+      "metric": 1.167,
+      "guard": true,
+      "at": "2026-11-02T21:35:24+00:00"
+    }
+  ],
+  "verdict": "keep",
+  "why": "median 8.159 -> 1.177; margin 6.982 exceeds noise spread 2.395 over 3 interleaved runs"
+}
