@@ -18,7 +18,8 @@
         "experiments/02-parallel-manifest-verify/trial.sh",
         "experiments/02-parallel-manifest-verify/guard.sh",
         "experiments/02-parallel-manifest-verify/metric.py",
-        "scripts/verify_install.py"
+        "scripts/verify_install.py",
+        "scripts/selftest.sh"
     ],
     "next_step": "copy experiments/01-dr-backup-manifest-cache as the shape for your first experiment, then python3 scripts/experiment_harness.py run <dir>",
     "verify_skill": "scripts/verify_install.py"
