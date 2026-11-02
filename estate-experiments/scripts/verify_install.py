@@ -10,7 +10,6 @@ Exit 0 = proven; 1 = a check failed. Stdlib only.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
@@ -18,6 +17,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
+sys.path.insert(0, str(HERE))
+from experiment_harness import bash_exe  # noqa: E402  (single bash resolver for arms)
 
 
 def monitor_path() -> Path:
@@ -31,19 +32,6 @@ def monitor_path() -> Path:
 def check(label: str, ok: bool, detail: str = "") -> bool:
     print(("PASS " if ok else "FAIL ") + label + (f": {detail}" if detail else ""))
     return ok
-
-
-def find_bash() -> str | None:
-    """A real Git-for-Windows / POSIX bash, never the WSL stub in WindowsApps."""
-    import shutil
-    candidates = [shutil.which("bash")]
-    if sys.platform == "win32":
-        candidates = [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe",
-                      str(Path.home() / "AppData" / "Local" / "Programs" / "Git" / "bin" / "bash.exe")]
-    for c in candidates:
-        if c and Path(c).is_file() and "WindowsApps" not in str(c):
-            return c
-    return None
 
 
 def main() -> int:
@@ -67,18 +55,17 @@ def main() -> int:
         (exp / "metric.py").write_text(
             "import re\n\ndef parse(o):\n    return float(re.findall(r'real ([0-9.]+)', o)[-1])\n")
         (exp / "guard.sh").write_text('#!/usr/bin/env bash\no="$(cat)"; echo "$o" | grep -q WORK_DONE\n')
-        # The end-to-end probe runs the arms with bash. A node without a real bash (Git for
-        # Windows) cannot run the probe: that is reported as a named limit, never a silent pass
-        # and never a false fault in the harness, which the falsifier suite above already proves.
-        bash = find_bash()
-        if bash is None:
-            print("NOTE end-to-end probe NOT RUNNABLE here: no Git-for-Windows bash "
-                  "(WindowsApps bash is the WSL stub). Harness logic proven by the falsifier suite.")
+        # The end-to-end probe runs arms under bash. A node with no Git-for-Windows bash cannot
+        # run it: reported as a named limit (never a silent pass, never a harness fault).
+        try:
+            bash_exe()
+        except RuntimeError as e:
+            print(f"NOTE end-to-end probe NOT RUNNABLE here: {e}. "
+                  "Harness logic is proven by the falsifier suite above.")
             results.append(True)
         else:
             r = subprocess.run([sys.executable, str(harness), "run", str(exp), "--runs", "2"],
-                               capture_output=True, text=True, timeout=300,
-                               env={**os.environ, "PATH": str(Path(bash).parent) + os.pathsep + os.environ.get("PATH", "")})
+                               capture_output=True, text=True, timeout=300)
             results.append(check("harness end-to-end -> keep", '"verdict": "keep"' in r.stdout,
                                  "" if '"verdict": "keep"' in r.stdout else r.stdout[-200:]))
 
@@ -86,7 +73,7 @@ def main() -> int:
     results.append(check("monitor two-phase interface", "--confirm-delivered" in m.stdout))
 
     ok = all(results)
-    print("VERIFY OK — estate-experiments installed and working" if ok else "VERIFY FAILED")
+    print("VERIFY OK - estate-experiments installed and working" if ok else "VERIFY FAILED")
     return 0 if ok else 1
 
 

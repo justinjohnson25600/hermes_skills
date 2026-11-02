@@ -46,10 +46,23 @@ from pathlib import Path
 VERDICTS = ("keep", "discard", "unproven")
 
 
+def bash_exe() -> str:
+    """The bash that runs experiment arms. On Windows a bare 'bash' resolves to
+    System32\\bash.exe (the WSL launcher), so arms must run under Git for Windows' bash."""
+    if sys.platform != "win32":
+        return "bash"
+    for c in (Path(r"C:\Program Files\Git\bin\bash.exe"),
+              Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+              Path.home() / "AppData" / "Local" / "Programs" / "Git" / "bin" / "bash.exe"):
+        if c.is_file():
+            return str(c)
+    raise RuntimeError("no Git-for-Windows bash installed: a bare 'bash' is the WSL launcher on Windows")
+
+
 def sh(script: Path, timeout: int = 900) -> dict:
     t0 = time.monotonic()
     try:
-        p = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run([bash_exe(), str(script)], capture_output=True, text=True, timeout=timeout)
         rc, out = p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired as exc:
         rc, out = 124, f"TIMEOUT after {timeout}s: {exc}"
@@ -65,7 +78,7 @@ def load_metric(exp_dir: Path):
 
 
 def guard_ok(guard: Path, arm_output: str) -> bool:
-    p = subprocess.run(["bash", str(guard)], input=arm_output,
+    p = subprocess.run([bash_exe(), str(guard)], input=arm_output,
                        capture_output=True, text=True, timeout=300)
     return p.returncode == 0
 

@@ -1,6 +1,6 @@
 ---
 name: estate-experiments
-version: 0.3.0
+version: 0.3.1
 author: justin
 license: MIT
 description: Use when a recurring check, monitor, prompt or script should be improved by measurement instead of opinion — run a baseline-vs-trial experiment with a keep/discard receipt. Autoresearch-style loop for estate and client automation work.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - 2026-11-02
+- fix: harness ran arms with a bare `bash`; on Windows that is System32\bash.exe (WSL launcher), so every arm exited 127 and experiments were mislabelled `discard`. `bash_exe()` now resolves Git-for-Windows bash on win32 and raises a clear error when none is installed.
+- verify_install.py reuses `bash_exe()`; prints a named NOTE (not a pass-through) where no Git bash exists; ASCII-only output.
+
 ## 0.3.0 — 2026-11-02
 - cron_ops_ledger.py: passive per-job run ledger from executions.db (snapshot read, never the live store).
 - selftest.sh: per-machine proof both skills are installed and working (deployed and repo layouts).

@@ -1,6 +1,6 @@
 {
     "name": "estate-experiments",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "category": "software-development",
     "description": "Baseline-vs-trial experiment harness with keep/discard receipts for anything that runs repeatedly.",
     "skill_files": [
