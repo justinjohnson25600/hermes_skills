@@ -1,6 +1,6 @@
 # quality-guard
 
-Verification discipline before relied-upon output, with a small optional evidence helper. Current: **0.1.1**.
+Verification discipline before relied-upon output, with a small optional evidence helper. Current: **1.0.7**.
 
 It requires actual checks, explicit uncertainty and safe holds—not a self-written declaration that something is ready. A verification footer is a record, **not proof** of execution. The Python helper validates a finite structural/evidence contract; it is not a truth detector, sandbox or automatic send blocker.
 

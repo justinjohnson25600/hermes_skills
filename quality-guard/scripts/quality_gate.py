@@ -1,357 +1,400 @@
 #!/usr/bin/env python3
-"""Bounded record/evidence checks. A passing result never certifies readiness."""
+# -*- coding: utf-8 -*-
+"""quality_gate.py — the machine-checkable half of the quality-guard skill.
+
+SKILL.md states: "The footer is the observable proof the gate ran, and it is
+what makes this skill testable."  This script is what makes that true.
+
+It checks the parts of the skill a machine can check, and stays out of the way
+of the parts it cannot. It does NOT decide whether you actually executed the
+code or fetched the docs -- no script can. It checks that the *record* of that
+work exists, is filled in, is in the agreed format, is in the right place, and
+that the "ready" labels are never applied without one.
+
+Design notes
+------------
+* Standard library only. No install step, no dependencies, no network.
+* Exit code 1 when the gate fails, so it drops straight into CI or a
+  pre-commit hook.
+* Negation is not a violation: "not yet production-ready" is the guardrail
+  working, and a checker that flags it manufactures findings -- which destroys
+  the signal value of the real ones.
+
+Usage
+-----
+    quality_gate.py --response FILE [--artefact FILE ...] [--tier 1|2|3]
+    quality_gate.py --response FILE --json
+"""
 from __future__ import annotations
 
 import argparse
-import codecs
-import hashlib
-from html.parser import HTMLParser
 import json
-import math
-import os
-from pathlib import Path
 import re
-import signal
-import stat
-import subprocess
 import sys
-import tempfile
-import time
-import uuid
+from pathlib import Path
 
-__version__ = '0.1.1'
-LIMIT = 4 * 1024 * 1024
-LABELS = ('Verified', 'Unverified', 'Assumptions')
-QUALIFIERS = ('[UNSUPPORTED CLAIM]', '[ASSUMPTION]', '[LIKELY ISSUE]', '[SAFETY/COMPLIANCE]')
-SHA = re.compile(r'[a-f0-9]{64}\Z')
-BLOCK = re.compile(r'(?m)^\s*Verified:[^\n]*\n\s*Unverified:[^\n]*\n\s*Assumptions:[^\n]*')
+__version__ = "1.0.2"
 
+# --------------------------------------------------------------------------
+# The footer, exactly as SKILL.md specifies it.
+# --------------------------------------------------------------------------
+FOOTER_STRICT = re.compile(
+    r"^[ \t]*Verified[ \t]*:.*?\n[ \t]*Unverified[ \t]*:.*?\n[ \t]*Assumptions[ \t]*:",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
 
-class InputError(ValueError):
-    pass
+# A footer ATTEMPT: a "Verified:" line however decorated (bold, bullet,
+# heading). Used to tell "drifted out of format" apart from "absent entirely",
+# because those are different failures with different fixes.
+FOOTER_LOOSE = re.compile(
+    r"^[ \t]*(?:[*_#>\-]+[ \t]*)*\**[ \t]*Verified[ \t]*:",
+    re.IGNORECASE | re.MULTILINE,
+)
 
+# An UNFILLED footer. SKILL.md's own template uses <angle-bracket> placeholders,
+# so shape alone cannot distinguish a real footer from a copied blank one.
+# Anchored to the start of the value so that a genuine footer mentioning "<" in
+# prose (e.g. a shell redirect) is not flagged.
+FOOTER_PLACEHOLDER = re.compile(
+    r"^[ \t]*(?:Verified|Unverified|Assumptions)[ \t]*:[ \t]*"
+    r"(<[^>\n]*>|\.\.\.|TBD|TODO|N/?A[ \t]*$|\[[^\]\n]*\])",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-def result(scope, findings=None, error=None):
-    return {'schema_version': 1, 'tool_version': __version__, 'scope': scope,
-            'status': 'error' if error else ('findings' if findings else 'pass'),
-            'readiness': 'not_assessed', 'findings': findings or [], 'error': error}
+# --------------------------------------------------------------------------
+# Script drift.
+#
+# A class of [\u4e00-\u9fff] covers CJK Unified Ideographs and nothing else.
+# Measured against realistic drift samples it misses 9 of 11: full-width
+# punctuation, ideographic space, kana, Hangul, Ext-A and compatibility forms
+# all pass clean. The ranges below close that gap.
+# --------------------------------------------------------------------------
+CJK_NARROW = re.compile(r"[\u4e00-\u9fff]")  # kept to report what a narrow class would miss
+CJK_FULL = re.compile(
+    "["
+    "\u2e80-\u2eff"  # CJK radicals supplement
+    "\u3000-\u303f"  # CJK symbols & punctuation (ideographic space, 、 。 「 」)
+    "\u3040-\u309f"  # Hiragana
+    "\u30a0-\u30ff"  # Katakana
+    "\u3100-\u312f"  # Bopomofo
+    "\u3130-\u318f"  # Hangul compatibility jamo
+    "\u3400-\u4dbf"  # CJK Unified Ext A
+    "\u4e00-\u9fff"  # CJK Unified  <- the only range a narrow class covers
+    "\ua000-\ua4cf"  # Yi
+    "\uac00-\ud7af"  # Hangul syllables
+    "\uf900-\ufaff"  # CJK compatibility ideographs
+    "\ufe30-\ufe4f"  # CJK compatibility forms
+    "\uff00-\uffef"  # Half/full-width forms
+    "]"
+)
 
+# The three labels the skill refuses to un-gated output.
+READY_CLAIM = re.compile(r"(production|client|publication)[- ]ready", re.IGNORECASE)
 
-def finding(code, where, detail):
-    return {'code': code, 'where': str(where), 'detail': detail}
+# Negation anywhere earlier in the SAME sentence means the label is being
+# WITHHELD or the rule is being described ("never label the output
+# production-ready"). Scanning only the adjacent few words misses these, and a
+# checker that reports them manufactures findings -- which destroys the signal
+# value of the real ones. Scope is the sentence, so a negation in a PREVIOUS
+# sentence cannot license a later claim.
+NEGATION_WORDS = re.compile(
+    r"\b(not|isn'?t|is ?n'?t|are ?n'?t|aren'?t|wasn'?t|weren'?t|never|no longer|"
+    r"cannot|can'?t|won'?t|refuse[sd]?|forbid(?:s|den)?|prohibit(?:s|ed)?|"
+    r"far from|nowhere near|yet to be|before it is|until it is|unless|without|"
+    r"path to|towards?|make it|becoming|avoid)\b",
+    re.IGNORECASE,
+)
+SENTENCE_SPLIT = re.compile(r"(?<=[.!?;:])\s+|\n{2,}|\n(?=[-*#|])")
 
+BLOCKING = ("CRITICAL", "HIGH")
 
-def read_text(path):
-    path = Path(path)
-    info = path.stat()
-    if not stat.S_ISREG(info.st_mode):
-        raise InputError('Text input must be a regular file')
-    if info.st_size > LIMIT:
-        raise InputError('Text input exceeds the documented 4 MiB limit')
-    with path.open('rb') as file:
-        opened = os.fstat(file.fileno())
-        if not stat.S_ISREG(opened.st_mode):
-            raise InputError('Opened text input must be a regular file')
-        raw = file.read(LIMIT + 1)
-    if len(raw) > LIMIT:
-        raise InputError('Text input grew beyond the documented limit')
-    encoding = 'utf-16' if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)) else 'utf-8-sig'
-    text = raw.decode(encoding)
-    if '\x00' in text:
-        raise InputError('NUL input: use UTF-8 or BOM-marked UTF-16')
-    return text.replace('\r\n', '\n').replace('\r', '\n')
-
-
-def record_errors(text):
-    lines = text.rstrip().splitlines()
-    if len(lines) < 3:
-        return ['Missing terminal three-line verification record']
-    fields = []
-    for label, line in zip(LABELS, lines[-3:]):
-        m = re.fullmatch(re.escape(label) + r':[ \t]*(.*)', line)
-        if not m:
-            return ['Record must be terminal, consecutive, unadorned Verified/Unverified/Assumptions lines']
-        value = m.group(1).strip()
-        if not value or re.match(r'^(?:<[^>]*>|\.\.\.|TBD\b|TODO\b|N/?A\s*$|\[(?:insert|fill|todo|tbd)\b)', value, re.I):
-            fields.append('%s is empty or a template placeholder' % label)
-        if value in QUALIFIERS:
-            fields.append('%s has a qualification label without any detail' % label)
-    # Only classify fences for the record itself, not arbitrary delivery claims.
-    opened = None
-    for i, line in enumerate(lines):
-        marker = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
-        if marker:
-            fence, rest = marker.groups()
-            if opened is None:
-                opened = (fence[0], len(fence))
-            elif fence[0] == opened[0] and len(fence) >= opened[1] and not rest.strip():
-                opened = None
-        if i >= len(lines) - 3 and opened is not None:
-            fields.append('A quoted code example is not the delivery record')
-            break
-    return fields
-
-
-class VisibleText(HTMLParser):
-    """Simple HTML text extraction, not browser/rendered-document verification."""
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
-        self.hidden = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ('script', 'style'):
-            self.hidden += 1
-        if tag in ('p', 'div', 'br', 'li', 'tr', 'td', 'h1', 'h2', 'h3', 'pre'):
-            self.parts.append('\n')
-
-    def handle_endtag(self, tag):
-        if tag in ('script', 'style') and self.hidden:
-            self.hidden -= 1
-        if tag in ('p', 'div', 'li', 'tr', 'td', 'h1', 'h2', 'h3', 'pre'):
-            self.parts.append('\n')
-
-    def handle_data(self, data):
-        if not self.hidden:
-            self.parts.append(data)
-
-
-def lint(args):
-    scope = 'record-structure-and-placement'
-    if args.response.suffix.lower() not in ('.md', '.markdown', '.txt'):
-        raise InputError('Response must be plain text or Markdown')
-    text = read_text(args.response)
-    errors = record_errors(text)
-    if args.tier in (1, 2) and not any(re.match(r'^(Verified|Unverified|Assumptions):', x) for x in text.splitlines()):
-        errors = []
-    out = [finding('record', args.response, e) for e in errors]
-    for path in args.artefact:
-        if path.suffix.lower() not in ('.md', '.markdown', '.txt', '.html', '.htm'):
-            raise InputError('Unsupported artefact format; export text or HTML explicitly')
-        body = read_text(path)
-        if path.suffix.lower() in ('.html', '.htm'):
-            parser = VisibleText()
-            parser.feed(body)
-            body = ''.join(parser.parts)
-        body = re.sub(r'\n[ \t]*\n', '\n', body)
-        if BLOCK.search(body):
-            out.append(finding('footer-placement', path, 'Internal verification record appears in a client artefact'))
-    return (1 if out else 0), result(scope, out)
+# --------------------------------------------------------------------------
+# Quoted regions.
+#
+# Prose that DESCRIBES the footer format necessarily contains the footer
+# format. This skill's own SKILL.md and README are the obvious cases: both
+# print the template inside a code fence, and a naive scan reads the example
+# as a real (unfilled) footer.
+#
+# The general trap: when a check asks a question about content, quoted or
+# fenced regions routinely contain the exact vocabulary being searched for, so
+# they must be excluded before matching -- otherwise documentation about a rule
+# is indistinguishable from a violation of it.
+# --------------------------------------------------------------------------
+FENCE_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[^\n]*\n.*?(?:^\1?\2[^\n]*$|\Z)",
+                      re.DOTALL | re.MULTILINE)
+INDENTED_BLOCK_RE = re.compile(r"^(?:[ ]{4,}|\t)[^\n]*$", re.MULTILINE)
+INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+# YAML frontmatter is metadata -- trigger phrases listed there are the skill
+# declaring what fires it, not a claim about the current deliverable.
+FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n.*?^---[ \t]*\r?$",
+                            re.DOTALL | re.MULTILINE)
 
 
-def fingerprint(path):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise InputError('Artefact must be a regular non-symlink file: %s' % path)
-    digest = hashlib.sha256()
-    with path.open('rb') as f:
-        first = os.fstat(f.fileno())
-        for part in iter(lambda: f.read(65536), b''):
-            digest.update(part)
-        last = os.fstat(f.fileno())
-    if (first.st_size, first.st_mtime_ns, first.st_ino) != (last.st_size, last.st_mtime_ns, last.st_ino):
-        raise InputError('Artefact changed while hashing')
-    return {'sha256': digest.hexdigest(), 'bytes': last.st_size}
+def strip_quoted(text: str) -> str:
+    """Blank out frontmatter, fenced/indented/inline code, preserving lines.
+
+    Replacement keeps newlines so that reported line numbers still match the
+    original document.
+    """
+    def _blank(m: re.Match) -> str:
+        return re.sub(r"[^\n]", " ", m.group(0))
+
+    text = FRONTMATTER_RE.sub(_blank, text)
+    text = FENCE_RE.sub(_blank, text)
+    text = INDENTED_BLOCK_RE.sub(_blank, text)
+    text = INLINE_CODE_RE.sub(_blank, text)
+    return text
 
 
-def approved_paths(paths):
-    if not paths:
-        raise InputError('Supply every final artefact explicitly')
-    for p in paths:
-        if p.is_symlink():
-            raise InputError('Symlink artefacts are not supported')
-    resolved = [str(p.resolve(strict=True)) for p in paths]
-    if len(set(resolved)) != len(resolved):
-        raise InputError('Duplicate artefact path')
-    return resolved
+def _sentence_containing(text: str, index: int) -> str:
+    """Return the sentence enclosing `index`, for negation scoping."""
+    start = 0
+    for m in SENTENCE_SPLIT.finditer(text, 0, index):
+        start = m.end()
+    end = len(text)
+    m = SENTENCE_SPLIT.search(text, index)
+    if m:
+        end = m.start()
+    return text[start:end]
 
 
-def hash_stream(f):
-    f.seek(0)
-    digest = hashlib.sha256()
-    size = 0
-    for part in iter(lambda: f.read(65536), b''):
-        size += len(part)
-        digest.update(part)
-    return digest.hexdigest(), size
+class Finding:
+    """One gate finding. Severity drives the exit code."""
+
+    __slots__ = ("severity", "check", "where", "detail")
+
+    def __init__(self, severity: str, check: str, where: str, detail: str) -> None:
+        self.severity = severity
+        self.check = check
+        self.where = where
+        self.detail = detail
+
+    def as_dict(self) -> dict:
+        return {
+            "severity": self.severity,
+            "check": self.check,
+            "where": self.where,
+            "detail": self.detail,
+        }
+
+    def __str__(self) -> str:
+        return "[{:<8}] {:<18} {}: {}".format(
+            self.severity, self.check, self.where, self.detail)
 
 
-def stop_child(p):
-    """Best-effort owned group/tree termination while the direct child is alive."""
-    if p.poll() is not None:
-        return
-    if os.name == 'nt':
-        tool = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'taskkill.exe'
-        subprocess.run([str(tool), '/PID', str(p.pid), '/T', '/F'], stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
-    else:
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass  # the owned group already exited
-    if p.poll() is None:
-        p.kill()
-    p.wait(timeout=5)
+def _line_of(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
 
 
-def run_check(args):
-    if not math.isfinite(args.timeout) or args.timeout <= 0 or args.max_output_bytes <= 0:
-        raise InputError('Timeout and output limit must be positive finite values')
-    command = args.command
-    if command and command[0] == '--':
-        command = command[1:]
-    if not command:
-        raise InputError('Supply an explicitly approved command after --')
-    paths = approved_paths(args.artefact)
-    before = {p: fingerprint(p) for p in paths}
-    # Exclusive creation checks destination permissions/existence BEFORE execution.
-    fd = os.open(str(args.receipt), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    record = {'schema_version': 1, 'tool_version': __version__, 'run_id': uuid.uuid4().hex,
-              'command_sha256': hashlib.sha256(json.dumps(command, ensure_ascii=True).encode('ascii')).hexdigest(),
-              'complete': False, 'returncode': None, 'status': 'error', 'artifacts': [],
-              'completion_scope': 'direct_child', 'descendant_completion': 'not_assessed',
-              'started_at': time.time()}
-    error = None
-    p = None
-    try:
-        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-            start = time.monotonic()
-            try:
-                creationflags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
-                p = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                                     creationflags=creationflags, start_new_session=os.name != 'nt')
-                while p.poll() is None:
-                    if time.monotonic() - start >= args.timeout:
-                        record['status'] = 'timeout'
-                        stop_child(p)
-                        break
-                    if os.fstat(out.fileno()).st_size + os.fstat(err.fileno()).st_size > args.max_output_bytes:
-                        record['status'] = 'output_limit'
-                        stop_child(p)
-                        break
-                    time.sleep(0.02)
-                p.wait(timeout=5)
-                record['returncode'] = p.returncode
-                if record['status'] not in ('timeout', 'output_limit'):
-                    record['status'] = 'success' if p.returncode == 0 else 'failed'
-                    record['complete'] = True
-            except (OSError, subprocess.SubprocessError) as exc:
-                error = type(exc).__name__ + ': execution did not complete'
-                record['status'] = 'error'
-            finally:
-                if p is not None and p.poll() is None:
-                    stop_child(p)
-            record['stdout_sha256'], record['stdout_bytes'] = hash_stream(out)
-            record['stderr_sha256'], record['stderr_bytes'] = hash_stream(err)
-            if record['stdout_bytes'] + record['stderr_bytes'] > args.max_output_bytes:
-                record.update(status='output_limit', complete=False)
-        for path in paths:
-            after = fingerprint(path)
-            record['artifacts'].append({'path': path, 'before': before[path], 'after': after})
-        if record['complete'] and any(x['before'] != x['after'] for x in record['artifacts']):
-            record['status'] = 'artifact_changed'
-    except (OSError, ValueError) as exc:
-        error = type(exc).__name__ + ': artefact or receipt processing failed'
-        record.update(status='error', complete=False)
-    finally:
-        record['finished_at'] = time.time()
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(record, f, ensure_ascii=True, sort_keys=True)
-            f.write('\n')
-            f.flush()
-            os.fsync(f.fileno())
-    rc = 0 if record['status'] == 'success' else (1 if record['status'] in ('failed', 'artifact_changed') else 2)
-    obj = result('execution-record', [] if rc == 0 else [finding(record['status'], args.receipt, 'Check did not establish successful unchanged-artefact evidence')], error=error if rc == 2 else None)
-    if rc == 2:
-        obj['status'] = 'error'
-    obj['receipt'] = str(args.receipt)
-    obj['completion_scope'] = 'direct_child'
-    obj['descendant_completion'] = 'not_assessed'
-    return rc, obj
+# --------------------------------------------------------------------------
+# Checks
+# --------------------------------------------------------------------------
+def check_footer(prose: str, tier: int) -> list:
+    """Tier 3 must carry a filled, correctly-shaped verification footer.
 
-
-def unique_object(pairs):
-    obj = {}
-    for key, value in pairs:
-        if key in obj:
-            raise InputError('Duplicate JSON key')
-        obj[key] = value
-    return obj
-
-
-def verify(args):
-    paths = approved_paths(args.artefact)
-    current = {p: fingerprint(p) for p in paths}
+    `prose` is already stripped of quoted regions by the caller.
+    """
     out = []
-    for source in args.receipt:
-        try:
-            r = json.loads(read_text(source), object_pairs_hook=unique_object,
-                           parse_constant=lambda value: (_ for _ in ()).throw(InputError('Non-finite JSON number')))
-        except RecursionError:
-            raise InputError('Receipt JSON nesting exceeds parser support') from None
-        required = ('schema_version', 'tool_version', 'run_id', 'command_sha256', 'complete', 'returncode', 'status',
-                    'artifacts', 'stdout_sha256', 'stderr_sha256', 'stdout_bytes', 'stderr_bytes',
-                    'completion_scope', 'descendant_completion')
-        if not isinstance(r, dict) or any(k not in r for k in required):
-            raise InputError('Receipt has missing required fields')
-        if type(r['schema_version']) is not int or r['schema_version'] != 1 or r['tool_version'] != __version__:
-            raise InputError('Unsupported receipt schema/producer version')
-        if r['completion_scope'] != 'direct_child' or r['descendant_completion'] != 'not_assessed':
-            raise InputError('Unsupported receipt completion scope')
-        if not isinstance(r['run_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', r['run_id']):
-            raise InputError('Invalid receipt run ID')
-        if not isinstance(r['status'], str) or r['status'] not in ('success', 'failed', 'artifact_changed', 'timeout', 'output_limit', 'error'):
-            raise InputError('Invalid receipt status')
-        if type(r['complete']) is not bool or (r['returncode'] is not None and type(r['returncode']) is not int):
-            raise InputError('Invalid completion/returncode types')
-        for key in ('command_sha256', 'stdout_sha256', 'stderr_sha256'):
-            if not isinstance(r[key], str) or not SHA.fullmatch(r[key]):
-                raise InputError('Invalid receipt digest')
-        for key in ('stdout_bytes', 'stderr_bytes'):
-            if type(r[key]) is not int or r[key] < 0:
-                raise InputError('Invalid output byte count')
-        rows = r['artifacts']
-        if not isinstance(rows, list) or any(not isinstance(x, dict) or set(x) != {'path', 'before', 'after'} for x in rows):
-            raise InputError('Invalid artefact manifest')
-        if len(rows) != len(paths) or {x['path'] for x in rows} != set(paths):
-            raise InputError('Receipt paths differ from explicitly approved artefacts')
-        for row in rows:
-            for key in ('before', 'after'):
-                value = row[key]
-                if not isinstance(value, dict) or set(value) != {'sha256', 'bytes'} or not isinstance(value['sha256'], str) or not SHA.fullmatch(value['sha256']) or type(value['bytes']) is not int or value['bytes'] < 0:
-                    raise InputError('Invalid artefact fingerprint')
-            if row['before'] != row['after'] or row['after'] != current[row['path']]:
-                out.append(finding('stale-artifact', source, 'Receipt does not bind the current unchanged bytes'))
-        if r['complete'] is not True or r['returncode'] != 0 or r['status'] != 'success':
-            out.append(finding('unsuccessful-check', source, 'Required receipt is not a completed successful check'))
-    return (1 if out else 0), result('receipt-and-artifact-binding', out)
+    if tier < 3:
+        return out
+
+    if FOOTER_STRICT.search(prose):
+        # A strict-shaped footer with a whitespace-only value is a blank footer: the
+        # shape matched but no evidence was written (test_blank_verified_fails).
+        m = FOOTER_STRICT.search(prose)
+        first_line = prose[m.start():prose.find("\n", m.start())]
+        if first_line.split(":", 1)[1].strip() == "":
+            out.append(Finding(
+                "CRITICAL", "footer-unfilled", "response",
+                "footer has the correct shape but the Verified line is empty — "
+                "a blank footer is not evidence"))
+            return out
+        ph = FOOTER_PLACEHOLDER.search(prose)
+        if ph:
+            out.append(Finding(
+                "CRITICAL", "footer-unfilled", "response",
+                "footer has the correct shape but still contains the template "
+                "placeholder {!r} on line {} — a blank footer is not evidence".format(
+                    ph.group(1)[:40], _line_of(prose, ph.start()))))
+        return out
+
+    if FOOTER_LOOSE.search(prose):
+        out.append(Finding(
+            "HIGH", "footer-shape", "response",
+            "footer attempted but not in the specified three-line form "
+            "(Verified:/Unverified:/Assumptions:) — a drifted footer is not "
+            "machine-checkable"))
+    else:
+        out.append(Finding(
+            "CRITICAL", "footer-missing", "response",
+            "Tier 3 delivery carries no verification footer; the gate left no "
+            "evidence that it ran"))
+    return out
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest='action', required=True)
-    lp = sub.add_parser('lint', help='Check record structure/placement, never semantic readiness')
-    lp.add_argument('--response', type=Path, required=True)
-    lp.add_argument('--artefact', type=Path, action='append', default=[])
-    lp.add_argument('--tier', type=int, choices=(1, 2, 3), default=3)
-    rp = sub.add_parser('run', help='Execute an explicitly approved check and record bounded evidence')
-    rp.add_argument('--receipt', type=Path, required=True)
-    rp.add_argument('--artefact', type=Path, action='append', required=True)
-    rp.add_argument('--timeout', type=float, default=60)
-    rp.add_argument('--max-output-bytes', type=int, default=1024 * 1024)
-    rp.add_argument('command', nargs=argparse.REMAINDER)
-    vp = sub.add_parser('verify', help='Compare explicit receipts with explicit final artefacts')
-    vp.add_argument('--receipt', type=Path, action='append', required=True)
-    vp.add_argument('--artefact', type=Path, action='append', required=True)
-    args = parser.parse_args()
+def check_ready_claim(prose: str, tier: int) -> list:
+    """The '*-ready' prohibition is tier-INDEPENDENT.
+
+    SKILL.md calls this "the actual guardrail". Scoping it to Tier 3 would make
+    it dead code, because the Tier 3 footer check already fires on the same
+    input -- proven by mutation testing, where disabling a tier-scoped version
+    left the suite green. A Tier 1 draft may not call itself client-ready.
+
+    `prose` is already stripped of quoted regions by the caller.
+    """
+    out = []
+    if FOOTER_STRICT.search(prose) and not FOOTER_PLACEHOLDER.search(prose):
+        return out
+    for m in READY_CLAIM.finditer(prose):
+        sentence = _sentence_containing(prose, m.start())
+        if NEGATION_WORDS.search(sentence):
+            continue  # label withheld or rule described -- not a violation
+        out.append(Finding(
+            "CRITICAL", "unbacked-claim", "response",
+            "asserts {!r} on line {} without a filled verification footer; "
+            "SKILL.md forbids this label on un-gated output (tier {})".format(
+                m.group(0), _line_of(prose, m.start()), tier)))
+        break
+    return out
+
+
+def check_artefact(path: Path, max_hits: int = 10) -> list:
+    """Client-facing artefacts: no script drift, and no footer leaked in."""
+    out = []
     try:
-        rc, obj = {'lint': lint, 'run': run_check, 'verify': verify}[args.action](args)
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        rc, obj = 2, result(args.action, error=type(exc).__name__ + ': ' + str(exc))
-    print(json.dumps(obj, ensure_ascii=True, sort_keys=True))
-    return rc
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        out.append(Finding("HIGH", "unreadable", str(path), str(exc)))
+        return out
+
+    hits = 0
+    for m in CJK_FULL.finditer(text):
+        ch = m.group(0)
+        narrow_would_miss = not CJK_NARROW.match(ch)
+        out.append(Finding(
+            "CRITICAL", "cjk-drift", path.name,
+            "line {} contains U+{:04X} {!r}{}".format(
+                _line_of(text, m.start()), ord(ch), ch,
+                "  (a [\\u4e00-\\u9fff] class would MISS this)"
+                if narrow_would_miss else "")))
+        hits += 1
+        if hits >= max_hits:
+            out.append(Finding(
+                "INFO", "cjk-drift", path.name,
+                "further drift hits suppressed after {}".format(max_hits)))
+            break
+
+    artefact_prose = strip_quoted(text)
+    if FOOTER_STRICT.search(artefact_prose) or FOOTER_LOOSE.search(artefact_prose):
+        out.append(Finding(
+            "HIGH", "footer-placement", path.name,
+            "verification footer found INSIDE a client-facing artefact; "
+            "SKILL.md places it in the accompanying chat response only"))
+    return out
 
 
-if __name__ == '__main__':
-    raise SystemExit(main())
+def run(response_path, artefacts, tier: int) -> list:
+    """Run every applicable check. Returns a list of Finding.
+
+    An unreadable input yields a finding rather than an exception: a traceback
+    from a gate is indistinguishable from the gate itself being broken, which
+    is precisely the ambiguity a gate exists to remove.
+    """
+    findings = []
+    if response_path is not None:
+        try:
+            response = Path(response_path).read_text(
+                encoding="utf-8", errors="replace")
+        except OSError as exc:
+            findings.append(Finding(
+                "HIGH", "unreadable", str(response_path),
+                "could not read the response file: {}".format(exc)))
+        else:
+            prose = strip_quoted(response)
+            findings += check_footer(prose, tier)
+            findings += check_ready_claim(prose, tier)
+    for a in artefacts or []:
+        findings += check_artefact(Path(a))
+    return findings
+
+
+def record_run(log_path, tier: int, findings: list, blocking: list,
+               response_path=None, artefacts=None) -> None:
+    """Append one JSON line describing this run.
+
+    Deliberately best-effort: recording is observability, not the gate itself.
+    A log that cannot be written must never turn a passing deliverable into a
+    failing one, so every error here is swallowed.
+    """
+    try:
+        import datetime
+        record = {
+            "timestamp": datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds"),
+            "version": __version__,
+            "tier": tier,
+            "pass": not blocking,
+            "blocking": len(blocking),
+            "findings": len(findings),
+            "checks_failed": sorted({f.check for f in blocking}),
+            "response": str(response_path) if response_path else None,
+            "artefacts": [str(a) for a in (artefacts or [])],
+        }
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 - never let logging fail the gate
+        pass
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(
+        prog="quality_gate.py",
+        description="Enforcement gate for the quality-guard skill.",
+        epilog="Exit code 1 means the gate FAILED. See docs/how-it-works.md.")
+    p.add_argument("--response", type=Path,
+                   help="the chat response accompanying delivery")
+    p.add_argument("--artefact", type=Path, action="append", default=[],
+                   help="a client-facing artefact (repeatable)")
+    p.add_argument("--tier", type=int, choices=(1, 2, 3), default=3,
+                   help="risk tier of the deliverable (default: 3)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="emit machine-readable JSON")
+    p.add_argument("--log", type=Path, metavar="FILE",
+                   help="append a JSON-lines run record to FILE (best-effort; "
+                        "a log failure never fails the gate)")
+    p.add_argument("--version", action="version",
+                   version="quality_gate.py {}".format(__version__))
+    args = p.parse_args(argv)
+
+    if not args.response and not args.artefact:
+        p.error("need --response and/or --artefact")
+
+    findings = run(args.response, args.artefact, args.tier)
+    blocking = [f for f in findings if f.severity in BLOCKING]
+
+    if args.log:
+        record_run(args.log, args.tier, findings, blocking,
+                   args.response, args.artefact)
+
+    if args.as_json:
+        print(json.dumps({
+            "version": __version__,
+            "tier": args.tier,
+            "pass": not blocking,
+            "blocking": len(blocking),
+            "findings": [f.as_dict() for f in findings],
+        }, indent=2, ensure_ascii=False))
+    else:
+        for f in findings:
+            print(f)
+        if not findings:
+            print("No findings.")
+        print("\nGATE {} — {} blocking, {} total".format(
+            "FAILED" if blocking else "PASSED", len(blocking), len(findings)))
+
+    return 1 if blocking else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

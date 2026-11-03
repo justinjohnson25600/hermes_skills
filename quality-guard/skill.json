@@ -1,6 +1,6 @@
 {
     "name": "quality-guard",
-    "version": "0.1.1",
+    "version": "1.0.7",
     "category": "reviewer",
     "description": "Pre-delivery verification discipline with bounded record and execution-evidence checks; never automatic readiness certification.",
     "needs_reviewer_config": false,
@@ -9,7 +9,9 @@
         "CHANGELOG.md",
         "VERIFICATION.md",
         "references/verification-actions.md",
+        "references/desktop-integration-verification.md",
         "scripts/quality_gate.py",
+        "scripts/check_estate_parity.py",
         "scripts/test_quality_gate.py"
     ],
     "verify_skill": "scripts/test_quality_gate.py",

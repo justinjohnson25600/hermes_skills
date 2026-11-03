@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.7 — 2026-11-03
+- Landed the estate-honed 1.0.x line as canonical (from jj-amd winexpert/g0ksc copies; owner decision 2026-11-03: land the newest honed line).
+- Adds references/desktop-integration-verification.md and scripts/check_estate_parity.py (estate parity check).
+- 0.1.x line remains history below.
+
 All notable changes to quality-guard. Semver; every published change bumps the patch number.
 
 ## 0.1.1

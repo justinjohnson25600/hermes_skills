@@ -1,47 +1,76 @@
-# Verification actions and acceptance boundaries
+# Verification actions — extended mapping and edge cases
 
-## Mixed tiers and required checks
+Read this when the SKILL.md table doesn't cleanly cover the situation.
 
-Apply the strictest tier to the claims it governs. Define required checks before accepting a delivery. An unavailable production credential means the live integration is unverified, not that a local test stands in for it. Hold unsafe outward action; a safe limited draft can disclose its narrower scope. Unattended work records/escalates the blocked action without suspending unrelated work or monitoring.
+## Mixed-tier documents
 
-## Actual execution and evidence layers
+A document can contain tiers side by side — e.g. a blog post (Tier 2) embedding a dosage claim (Tier 3). The strictest tier present governs the claims it applies to, not the whole document: verify the dosage via medical-research-engine; the surrounding prose only needs the Tier 2 claims check. The footer covers the whole deliverable.
 
-Execute the delivered CLI/artefact, not only imports or syntax. Check help/dry-run and relevant tests/linter in the intended sandbox. Source/unit checks, final built bytes, installed-runtime behaviour, native-host callbacks/UI and live third-party effects are separate claims. A parsed interface, successful registration or mocked call is not native/live acceptance.
+## Code that cannot fully run in the sandbox
 
-A helper receipt records a bounded explicit command and exact file snapshots. It does not authenticate itself or determine whether the test is adequate. The helper's `readiness: not_assessed` is intentional: the procedural acceptance decision still needs all required evidence.
+Common in Justin's stack: Laravel code needing his Plesk-hosted DBs, mail through his SMTP config, Alpine.js behaviour needing a browser.
 
-Runner completion and output accounting are direct-child-only (`completion_scope: direct_child`, `descendant_completion: not_assessed`). An ordinary descendant can survive its parent without detaching; its later work is not bounded or certified by the parent's successful receipt. Require commands to wait for their own checks and independently verify asynchronous effects. Input bounds cover regular files and parser limits, not hostile concurrent filesystem mutation.
+- Run everything that *can* run: syntax (`php -l`), static analysis, unit-testable logic extracted and executed, `composer.json`/`package.json` dependency sanity.
+- For the remainder, state precisely what was and wasn't executed in the footer: "syntax-checked and logic unit-tested locally; SMTP path untested — requires live Plesk mail config."
+- Never present partial checks as end-to-end verification. Name the executed layer and the remaining gate separately; Justin may deploy what the response appears to approve.
 
-## Destructive actions and preservation
+## Cross-process helper programs
 
-Use existing permission, backup and ownership controls. Independently bound a destructive tool's target set; its dry-run may share the same bug. Unknown ownership is not orphan status. For shared settings, test two independently loaded snapshots racing with additions, deletion/rotation and refresh; successful atomic writes can still lose another writer's update. Use synthetic data, never real credentials in fixtures.
+Use this recipe when a tested controller launches embedded source or a helper script:
 
-## Versions, supplied sources and conflicting facts
+1. Load the exact shipped helper bytes or source constant, not a rewritten test equivalent. Restore temporary changes to argv, stdout, import paths and module bindings after the test.
+2. Intercept only the native exchange or other external effect. Capture the request and return explicitly labelled unit-test input; do not mock the whole subprocess and then claim the helper ran.
+3. Execute the helper with representative positional data and capture its actual stdout. For a newline-framed JSON protocol, check both the request bytes and the output terminator; an extra source-string escaping layer can turn a newline into two literal characters.
 
-Fetch authoritative documentation matching the installed/pinned version through an available retrieval capability. A connector name is an example, not a universal dependency. If access is unavailable, record the gap rather than cite remembered signatures.
+```python
+import json
 
-Re-read supplied material for faithful quotations and summaries. It establishes what was supplied, not automatic truth about external law, medicine, versions or behaviour. Retrieve prior reports/decisions again before relying on them. Prefer appropriate primary evidence; newest is not automatically correct for an older pinned version. State material conflicts and why a source governs the particular claim.
+assert request.endswith(bytes([10]))
+assert not request.endswith(bytes([92, 110]))
+payload, end = json.JSONDecoder().raw_decode(stdout)
+assert stdout[end:] == chr(10)
+```
 
-## Final-content, package and installed acceptance
+4. Add malformed/refused replies and precision-boundary inputs. Exercise the helper's own identity comparison rather than assuming it shares the controller's implementation; duplicated code can introduce a wider tolerance.
+5. Mutate framing or identity evidence and confirm the test rejects it. A source-text search for an API name, or an assertion containing an unconditional true branch, proves no behaviour.
+6. Run the actual adapter in an authorised disposable native fixture. Keep this verdict separate from the intercepted-helper test; the latter establishes executable protocol behaviour, not real peer control or successful recovery.
 
-Fix generating sources, rebuild/reassemble and re-run affected checks after style/factual edits. Freeze the reviewed final bytes; compare installed and packaged hashes before release. Do not let later rebuilds silently replace the accepted candidate. Hash snapshots do not establish that bytes never changed between observations.
+## Shared settings and token persistence
 
-Inspect an explicit allow-listed package and the staged source index independently. Test builds, local paths, encrypted stores and credentials can leak through different channels; encryption does not make account data distributable. Preserve concurrent and locally honed work, backups and operator exclusions.
+1. Load two independent snapshots, change the newer snapshot, then attempt a save through the older one; assert preservation of additions, deletions, selections and rotated credentials, not just successful decryption.
+2. Protect the complete read–modify–write transaction with a lock or revision compare-and-swap; a lock around individual Load and Save calls does not prevent a stale snapshot overwriting current data.
+3. Persist asynchronous refresh results by merging token fields into the latest unchanged account identity/configuration and unchanged token baseline; never save an entire stale review-window settings object after a request finishes.
+4. Advance the caller's revision only when its configuration snapshot remains current; adopting a newer revision without adopting its configuration defeats stale-write protection.
 
-## Records, clients and honest limits
+## Installation and publication failure paths
 
-The three filled labels belong alongside delivery to the operator or in appropriate internal technical work. Do not leak them into client artefacts. Do not hide substantive recipient-facing limits just to make the document look clean. A footer, successful skill load, invocation count or regex pass is not proof of verification or effectiveness.
+1. Snapshot the dedicated registration and verify its disabled state **before** changing its target; an enabled previous registration can otherwise load an unverified replacement after an intermediate failure.
+2. Verify the isolated loader/ABI gate before enabling, and inject failures after each registration stage. Restore prior values on failure, read them back, and keep startup disabled until a known-good activation is verified.
+3. Create registry keys only when absent; recreating a PowerShell registry key with `New-Item -Force` can erase previously written values. For native `RegistryKey.SetValue` rollback, open an explicitly writable key and dispose it; a provider `Get-Item` handle is not evidence of write access.
+4. Stage an exact file allow-list in a fresh directory, create an archive at a unique temporary name on the destination volume, read back exact membership and reject missing, duplicate or unlisted entries, then publish atomically. Remove failed temporary archives/stages without deleting a prior valid publication.
+5. Exercise dirty-stage markers, actual corrupted archives and a locked publication destination; assert both rejection and absence of a newly published bad archive. Check archive payload hashes against the live-tested binaries.
+6. Inspect the Git index independently with `git diff --cached --name-only -z` and `git diff --cached --check`; positive-list packaging does not stop a broad `git add` from staging retained test data. Add ignore-rule regressions for retained build directories and encrypted stores, including a negative assertion that intended source assets remain trackable.
 
-Legitimate quotations, Markdown examples and requested multilingual content are not failed delivery claims. The helper deliberately does not parse semantic readiness statements. `lint` checks only its declared textual record/placement contract; unsupported formats fail explicitly. Native/rendered documents still need their own acceptance.
+## Frozen binaries and rebuilding verification
 
-## Domain-gate delegation
+1. Record the tested release hashes and relevant source/build inputs before deployment; a non-deterministic compiler can produce different bytes from unchanged source.
+2. Keep verification outputs separate from the frozen candidate where the build supports it. When an existing verification command overwrites the candidate, snapshot its bytes and inputs first, run the checks, prove the inputs stayed unchanged, restore the frozen bytes, then hash-verify equality with the installation and archive.
+3. Refuse restoration of an earlier binary after relevant source/build inputs change; rebuild and verify a new candidate instead. Report source-level test results separately from exact installed-binary acceptance.
 
-Record which required checks the domain gate actually covers and use its evidence for those. Retain uncovered checks without duplicating equivalent ones. A gate's existence or a matching heading is not evidence of equivalent coverage.
+## Stack-specific verification shortcuts
 
-## Falsification and release qualification
+- **Laravel / Filament / Pest / Tailwind / Alpine.js** — versions move quickly; use an enabled documentation MCP when available, otherwise retrieve current official docs with `web_extract`. Confirm the returned content actually contains the contract being cited; a page title or navigation-only extraction is not API evidence. Never use memory alone for config keys, method signatures or breaking changes.
+- **Plesk behaviour** — documentation is thin and version-dependent. If a claim rests on Plesk-specific behaviour that can't be verified, flag it and recommend an empirical test on the server rather than asserting.
+- **PostgreSQL vs MySQL differences** — Figurs is PostgreSQL by deliberate choice. Verify dialect-specific SQL against the right engine; don't assume MySQL semantics carry over.
 
-Pair real bad cases with legitimate good controls. Break each important guard deliberately and confirm its targeted assertion fails; import/fixture crashes are not successful mutation evidence. Compare test names/counts across supported platforms and retain failures, skipped checks and encoding errors.
+## Claims sourced from Justin's own prior work
 
-Exercise these procedural scenarios against any changed instructions: unattended required-safety failure holds outward delivery; harmless limited output can proceed with its limit; unavailable tools are disclosed; post-style factual changes trigger rechecks; recipient caveats survive operator/client separation. Static text checks and helper tests cannot establish model compliance. Historical usage/footers are not comparative effectiveness experiments.
+A figure from an earlier Theorem report, a config from a past conversation, a decision recorded in memory: these count as user-supplied material (top of the evidence order) **only if actually re-read in this session**. A remembered version of Justin's own data is still a memory, and memories drift. If it can't be retrieved, mark it `[ASSUMPTION]`.
 
-Stable fundamentals and subjective style do not need speculative research. Compute arithmetic and dates using an appropriate tool, and verify consequential/current claims with relevant evidence rather than inventing precision.
+## When search results conflict
+
+Two sources disagreeing is information, not noise. Prefer primary over secondary, newer over older for anything versioned, and say the disagreement exists rather than silently picking a side. A one-line "sources conflict on X; going with Y because Z" in the deliverable outranks fake certainty.
+
+## What does NOT need verification
+
+Don't burn tool calls on: stable fundamentals (how HTTP works, SQL join semantics), arithmetic the sandbox can confirm in one line, matters of judgement or style, or claims Justin supplied this session and that were read directly. Over-verification is its own failure mode — it adds latency and noise without adding truth.
