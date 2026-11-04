@@ -1,0 +1,7 @@
+{
+    "name": "failure-is-not-an-option",
+    "version": "0.2.0",
+    "category": "autonomous-ai-agents",
+    "description": "Use on every task. Find a way, finish and prove it.",
+    "needs_reviewer_config": false
+}

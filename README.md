@@ -16,6 +16,7 @@ Each folder is one installable skill: a `SKILL.md` (frontmatter + instructions t
 | [client-literature-monitor](client-literature-monitor/) | 0.2.1 | PubMed sweep per client case files' flagged markers; new-items-only digests, honest-unknown sources, silent when nothing new |
  Baseline-vs-trial experiment harness with keep/discard receipts — measure before changing anything that runs repeatedly |
 | [quality-guard](quality-guard/) | 1.0.7 | Pre-delivery verification discipline: actual checks, safe holds and honest limits, with optional bounded record linting and execution receipts. A footer or passing helper is not readiness proof |
+| [failure-is-not-an-option](failure-is-not-an-option/) | 0.2.0 | Takes the negativity out of agents: assume it can be done, no excuses or premature blockers, change approach until it works, finish everything and prove it, never fake results or bypass security |
 | [caveman](caveman/) | 0.1.0 | Terse output mode that cuts token spend while keeping every fact (vendored: JuliusBrussee/caveman) |
 | [make-interfaces-feel-better](make-interfaces-feel-better/) | 0.1.1 | UI polish review: animations, typography, shadows, hit areas (vendored: jakubkrehel/make-interfaces-feel-better) |
 | [pdf-creator](pdf-creator/) | 0.1.2 | Markdown to print-ready PDF with CJK fonts, themes and visual self-check (vendored: daymade/claude-code-skills) |

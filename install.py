@@ -16,8 +16,8 @@ Piping a remote script into an interpreter means trusting the source. Read it
 first if that matters to you — it is short on purpose.
 
 What it does:
-  1. Finds THIS machine's Hermes home (HERMES_HOME, %LOCALAPPDATA%\\hermes,
-     ~/.hermes, or a dotted dir that actually looks like one).
+  1. Finds THIS machine's Hermes home (explicit HERMES_HOME or the
+     platform default). An explicit missing home is refused, never redirected.
   2. Installs SKILL.md into <home>/skills/<category>/<name>/.
   3. If the skill ships code (declared in skill.json), installs it and writes a
      CLI shim onto PATH — a .cmd on Windows, a shebang script on POSIX.
@@ -53,28 +53,16 @@ def resolve_hermes_home(use_env: bool = True) -> Path:
     use_env=False gives the DEFAULT home (what a plain install with no
     HERMES_HOME would use); the shared CLI shim belongs to that home.
     """
-    env = os.environ.get("HERMES_HOME") if use_env else None
-    if env and Path(env).is_dir():
-        return Path(env)
+    env = os.environ.get("HERMES_HOME", "").strip() if use_env else ""
+    if env:
+        return Path(os.path.expanduser(os.path.expandvars(env)))
 
-    home = Path(os.path.expanduser("~"))
-    candidates: list[Path] = []
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        candidates.append(Path(local) / "hermes")
-    candidates.append(home / ".hermes")
-    try:
-        candidates.extend(sorted(p for p in home.glob(".*") if p.is_dir()))
-    except OSError:
-        pass
-
-    for c in candidates:
-        try:
-            if c.is_dir() and ((c / "config.yaml").is_file() or (c / "skills").is_dir()):
-                return c
-        except OSError:
-            continue
-    return home / ".hermes"
+    suffix = os.environ.get("HERMES_DATA_DIR_SUFFIX", "")
+    if IS_WIN:
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / ("hermes" + suffix)
+    return Path.home() / (".hermes" + suffix)
 
 
 def bin_dir() -> Path:
@@ -386,6 +374,9 @@ def install(skill: str, dry: bool, run_verify: bool) -> int:
         return 1
 
     home = resolve_hermes_home()
+    if os.environ.get("HERMES_HOME", "").strip() and not home.is_dir():
+        log(f"HERMES_HOME is not an existing directory: {home}; refusing to install into another profile.")
+        return 1
     category = manifest.get("category", "software-development")
     skills_dir = home / "skills" / category / skill
     log(f"hermes home : {home}")
