@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.2 - 2026-11-05
+- fix: the install verifier's end-to-end probe judged a 0.25s wall-clock gap over 2 runs; on Windows, Git-for-Windows bash start-up jitter exceeded it (jj-amd: spread 0.296s > margin 0.242s), so a correct install failed as "within noise". The probe now scores arms deterministically (SCORE 10 vs SCORE 1): it still proves arms run under bash, the guard, metric parsing and the verdict, with no timing dependence.
+
 ## 0.3.1 - 2026-11-02
 - fix: harness ran arms with a bare `bash`; on Windows that is System32\bash.exe (WSL launcher), so every arm exited 127 and experiments were mislabelled `discard`. `bash_exe()` now resolves Git-for-Windows bash on win32 and raises a clear error when none is installed.
 - verify_install.py reuses `bash_exe()`; prints a named NOTE (not a pass-through) where no Git bash exists; ASCII-only output.

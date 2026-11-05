@@ -50,10 +50,14 @@ def main() -> int:
         exp = Path(tmp) / "exp"
         exp.mkdir()
         (exp / "intent.md").write_text("# t\nimprove x\n")
-        (exp / "baseline.sh").write_text('#!/usr/bin/env bash\necho "WORK_DONE n=10"\nsleep 0.30\n')
-        (exp / "trial.sh").write_text('#!/usr/bin/env bash\necho "WORK_DONE n=10"\nsleep 0.05\n')
+        # A deterministic score, not wall time: the probe proves the harness path (arms under
+        # bash, guard, metric parse, verdict), not that this machine is quiet. A 0.25s sleep gap
+        # was swamped by Git-for-Windows bash start-up jitter (jj-amd 2026-11-05: spread 0.296s
+        # > margin 0.242s -> "within noise"), failing a correct install.
+        (exp / "baseline.sh").write_text('#!/usr/bin/env bash\necho "WORK_DONE n=10"\necho "SCORE 10"\n')
+        (exp / "trial.sh").write_text('#!/usr/bin/env bash\necho "WORK_DONE n=10"\necho "SCORE 1"\n')
         (exp / "metric.py").write_text(
-            "import re\n\ndef parse(o):\n    return float(re.findall(r'real ([0-9.]+)', o)[-1])\n")
+            "import re\n\ndef parse(o):\n    return float(re.findall(r'SCORE ([0-9.]+)', o)[-1])\n")
         (exp / "guard.sh").write_text('#!/usr/bin/env bash\no="$(cat)"; echo "$o" | grep -q WORK_DONE\n')
         # The end-to-end probe runs arms under bash. A node with no Git-for-Windows bash cannot
         # run it: reported as a named limit (never a silent pass, never a harness fault).
